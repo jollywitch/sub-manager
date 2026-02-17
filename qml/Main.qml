@@ -20,6 +20,9 @@ ApplicationWindow {
     y: backend.windowY
     width: backend.windowW
     height: backend.windowH
+    background: Rectangle {
+        color: "#ffffff"
+    }
 
     function statusBg(level) {
         if (level === "ok") return "#dff6e7"
@@ -39,6 +42,13 @@ ApplicationWindow {
         return "#efc76f"
     }
 
+    function statusLevelText(level) {
+        if (level === "ok") return "Ready"
+        if (level === "error") return "Error"
+        if (level === "progress") return "Working"
+        return "Warning"
+    }
+
     function clamp(value, minValue, maxValue) {
         return Math.max(minValue, Math.min(maxValue, value))
     }
@@ -51,10 +61,33 @@ ApplicationWindow {
         backend.saveWindowGeometry(x, y, width, height)
     }
 
-    ColumnLayout {
+    Item {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 10
+
+        Rectangle {
+            id: mainCardShadow
+            x: 8
+            y: 8
+            width: parent.width - 12
+            height: parent.height - 12
+            radius: 10
+            color: "transparent"
+            z: 0
+        }
+
+        Rectangle {
+            id: mainCard
+            anchors.fill: parent
+            anchors.margins: 0
+            radius: 0
+            color: "#ffffff"
+            border.width: 0
+            z: 1
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 10
 
         RowLayout {
             Layout.fillWidth: true
@@ -84,19 +117,17 @@ ApplicationWindow {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: backend.ffmpegStatus
+                    text: statusLevelText(backend.ffmpegStatusLevel)
                     wrapMode: Text.Wrap
                 }
             }
             Button {
-                text: "Download FFmpeg"
-                enabled: !backend.isDownloading
-                onClicked: backend.downloadFfmpeg()
-            }
-            Button {
-                text: "Select FFmpeg Directory"
-                enabled: !backend.isDownloading
-                onClicked: backend.selectFfmpegDirectory()
+                text: "FFmpeg Settings"
+                onClicked: {
+                    ffmpegSettingsWindow.visible = true
+                    ffmpegSettingsWindow.raise()
+                    ffmpegSettingsWindow.requestActivate()
+                }
             }
         }
 
@@ -297,18 +328,22 @@ ApplicationWindow {
                         height: tableScroll.height - headerRect.height - 6
 
                     ListView {
+                        id: videoListView
                         anchors.fill: parent
                         clip: true
                         spacing: 0
                         model: backend.videoFiles
 
                         delegate: Rectangle {
+                            id: rowDelegateRect
+                            property bool overlayActive: false
                             width: ListView.view.width
                             height: 42
                             radius: 6
                             border.width: 1
                             border.color: "#d9d9d9"
                             color: "white"
+                            z: (overlayActive || ListView.isCurrentItem) ? 1000 : 0
 
                             Item {
                                 id: rowContent
@@ -416,6 +451,7 @@ ApplicationWindow {
                                         contentHeight: height
                                         flickableDirection: Flickable.HorizontalFlick
                                         interactive: subtitleChipRow.width > width
+                                        clip: false
 
                                         Row {
                                             id: subtitleChipRow
@@ -425,8 +461,8 @@ ApplicationWindow {
                                             Repeater {
                                                 model: modelData.subtitle_language_items
                                                 delegate: Rectangle {
+                                                    id: subtitleChipRect
                                                     property string chipLanguage: modelData
-                                                    property bool keepMenuVisible: false
                                                     radius: 10
                                                     height: 24
                                                     color: "#f0f8ee"
@@ -442,62 +478,44 @@ ApplicationWindow {
                                                         color: "#244a1f"
                                                     }
 
-                                                    HoverHandler {
-                                                        id: subtitleChipHover
-                                                        onHoveredChanged: {
-                                                            if (hovered) {
-                                                                subtitleMenuHideDelay.stop()
-                                                                keepMenuVisible = true
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        onClicked: {
+                                                            if (subtitleMenuPopup.visible) {
+                                                                subtitleMenuPopup.close()
                                                             } else {
-                                                                subtitleMenuHideDelay.restart()
+                                                                var p = subtitleChipRect.mapToItem(root.contentItem, subtitleChipRect.width + 4, -2)
+                                                                subtitleMenuPopup.x = p.x
+                                                                subtitleMenuPopup.y = p.y
+                                                                videoListView.currentIndex = index
+                                                                rowDelegateRect.overlayActive = true
+                                                                subtitleMenuPopup.open()
                                                             }
                                                         }
                                                     }
 
-                                                    Timer {
-                                                        id: subtitleMenuHideDelay
-                                                        interval: 280
-                                                        repeat: false
-                                                        onTriggered: {
-                                                            if (!subtitleChipHover.hovered
-                                                                && !subtitleMenuHover.hovered
-                                                                && !editSubtitleButton.hovered
-                                                                && !infoSubtitleButton.hovered
-                                                                && !editSubtitleButton.down
-                                                                && !infoSubtitleButton.down) {
-                                                                keepMenuVisible = false
-                                                            }
-                                                        }
-                                                    }
-
-                                                    Rectangle {
-                                                        x: parent.width + 4
-                                                        y: -2
+                                                    Popup {
+                                                        id: subtitleMenuPopup
+                                                        parent: Overlay.overlay
+                                                        modal: false
+                                                        focus: false
+                                                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
                                                         width: 94
                                                         height: 70
-                                                        radius: 6
-                                                        color: "#ffffff"
-                                                        border.width: 1
-                                                        border.color: "#c7c7c7"
-                                                        visible: keepMenuVisible
-                                                            || subtitleChipHover.hovered
-                                                            || subtitleMenuHover.hovered
-                                                            || editSubtitleButton.hovered
-                                                            || infoSubtitleButton.hovered
-                                                            || editSubtitleButton.down
-                                                            || infoSubtitleButton.down
-                                                        z: 3
+                                                        padding: 0
 
-                                                        HoverHandler {
-                                                            id: subtitleMenuHover
-                                                            onHoveredChanged: {
-                                                                if (hovered) {
-                                                                    subtitleMenuHideDelay.stop()
-                                                                    keepMenuVisible = true
-                                                                } else {
-                                                                    subtitleMenuHideDelay.restart()
-                                                                }
+                                                        onClosed: {
+                                                            rowDelegateRect.overlayActive = false
+                                                            if (videoListView.currentIndex === index) {
+                                                                videoListView.currentIndex = -1
                                                             }
+                                                        }
+
+                                                        background: Rectangle {
+                                                            radius: 6
+                                                            color: "#ffffff"
+                                                            border.width: 1
+                                                            border.color: "#c7c7c7"
                                                         }
 
                                                         Column {
@@ -518,11 +536,10 @@ ApplicationWindow {
                                                                     color: "transparent"
                                                                     border.width: 0
                                                                 }
-                                                                onPressed: {
-                                                                    subtitleMenuHideDelay.stop()
-                                                                    keepMenuVisible = true
+                                                                onClicked: {
+                                                                    backend.editSubtitle(rowContent.filePath, chipLanguage)
+                                                                    subtitleMenuPopup.close()
                                                                 }
-                                                                onClicked: backend.editSubtitle(rowContent.filePath, chipLanguage)
                                                             }
                                                             Button {
                                                                 id: infoSubtitleButton
@@ -537,11 +554,10 @@ ApplicationWindow {
                                                                     color: "transparent"
                                                                     border.width: 0
                                                                 }
-                                                                onPressed: {
-                                                                    subtitleMenuHideDelay.stop()
-                                                                    keepMenuVisible = true
+                                                                onClicked: {
+                                                                    backend.showSubtitleInfo(rowContent.filePath, chipLanguage)
+                                                                    subtitleMenuPopup.close()
                                                                 }
-                                                                onClicked: backend.showSubtitleInfo(rowContent.filePath, chipLanguage)
                                                             }
                                                         }
                                                     }
@@ -561,6 +577,93 @@ ApplicationWindow {
                         color: "#666666"
                     }
                 }
+                }
+            }
+        }
+        }
+    }
+
+    }
+
+    Window {
+        id: ffmpegSettingsWindow
+        visible: false
+        width: 700
+        height: 180
+        minimumWidth: 560
+        minimumHeight: 160
+        title: "FFmpeg Settings"
+        transientParent: root
+        flags: Qt.Window
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#ffffff"
+
+            Rectangle {
+                id: ffmpegCardShadow
+                x: 8
+                y: 8
+                width: parent.width - 12
+                height: parent.height - 12
+                radius: 10
+                color: "transparent"
+                z: 0
+            }
+
+            Rectangle {
+                id: ffmpegCard
+                anchors.fill: parent
+                anchors.margins: 0
+                radius: 0
+                color: "#ffffff"
+                border.width: 0
+                z: 1
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 14
+                    spacing: 10
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Label { text: "Status:" }
+                        Rectangle {
+                            width: 10
+                            height: 10
+                            radius: 5
+                            color: statusBorder(backend.ffmpegStatusLevel)
+                            border.width: 1
+                            border.color: statusFg(backend.ffmpegStatusLevel)
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: backend.ffmpegStatus
+                            wrapMode: Text.Wrap
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Button {
+                            text: "Download FFmpeg"
+                            enabled: !backend.isDownloading
+                            onClicked: backend.downloadFfmpeg()
+                        }
+                        Button {
+                            text: "Select FFmpeg Directory"
+                            enabled: !backend.isDownloading
+                            onClicked: backend.selectFfmpegDirectory()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
             }
         }
