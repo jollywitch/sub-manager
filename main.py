@@ -11,7 +11,7 @@ import zipfile
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Property, QSettings, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QSettings, QThread, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
@@ -115,6 +115,8 @@ class AppBackend(QObject):
         self.ffprobe_path: str | None = None
         self.download_thread: QThread | None = None
         self.download_worker: FFmpegDownloadWorker | None = None
+        self._add_videos_dialog: QFileDialog | None = None
+        self._open_message_boxes: list[QMessageBox] = []
         self._ffmpeg_status = ""
         self._ffmpeg_status_level = "warn"
         self._downloading = False
@@ -158,7 +160,25 @@ class AppBackend(QObject):
 
     @Slot()
     def addVideos(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(None, "Select Video Files", "", VIDEO_FILTER)
+        if self._add_videos_dialog is not None and self._add_videos_dialog.isVisible():
+            self._add_videos_dialog.raise_()
+            self._add_videos_dialog.activateWindow()
+            return
+
+        dialog = QFileDialog()
+        dialog.setWindowTitle("Select Video Files")
+        dialog.setNameFilter(VIDEO_FILTER)
+        dialog.setFileMode(QFileDialog.ExistingFiles)
+        dialog.setModal(False)
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.filesSelected.connect(self._on_add_videos_selected)
+        dialog.finished.connect(self._cleanup_add_videos_dialog)
+        self._add_videos_dialog = dialog
+        dialog.open()
+
+    @Slot("QStringList")
+    def _on_add_videos_selected(self, files: list[str]) -> None:
         for path in files:
             absolute_path = os.path.abspath(path)
             if absolute_path in self._selected_paths:
@@ -175,6 +195,10 @@ class AppBackend(QObject):
                 }
             )
         self.videoFilesChanged.emit()
+
+    @Slot(int)
+    def _cleanup_add_videos_dialog(self, _result: int) -> None:
+        self._add_videos_dialog = None
 
     @Slot(int, bool)
     def setFileChecked(self, index: int, checked: bool) -> None:
@@ -258,16 +282,12 @@ class AppBackend(QObject):
     def showSubtitleInfo(self, file_path: str, language: str) -> None:
         payload = self._run_ffprobe_json(file_path)
         if payload is None:
-            QMessageBox.warning(
-                None,
-                "Subtitle Info",
-                "Could not read stream info with ffprobe.",
-            )
+            self._show_warning("Subtitle Info", "Could not read stream info with ffprobe.")
             return
 
         streams = payload.get("streams", [])
         if not isinstance(streams, list):
-            QMessageBox.information(None, "Subtitle Info", "No stream data found.")
+            self._show_info("Subtitle Info", "No stream data found.")
             return
 
         lang_filter = language.strip().lower() if language else ""
@@ -289,11 +309,7 @@ class AppBackend(QObject):
             subtitle_streams.append(stream)
 
         if not subtitle_streams:
-            QMessageBox.information(
-                None,
-                "Subtitle Info",
-                f"No subtitle streams found for '{language}'.",
-            )
+            self._show_info("Subtitle Info", f"No subtitle streams found for '{language}'.")
             return
 
         lines: list[str] = []
@@ -325,8 +341,7 @@ class AppBackend(QObject):
                 f"  default: {default_flag}, forced: {forced_flag}"
             )
 
-        QMessageBox.information(
-            None,
+        self._show_info(
             "Subtitle Info",
             f"File: {os.path.basename(file_path)}\n\n" + "\n\n".join(lines),
         )
@@ -348,8 +363,7 @@ class AppBackend(QObject):
             self.settings.setValue("ffmpeg/bin_dir", selected_dir)
             self._refresh_ffmpeg_status()
             return
-        QMessageBox.warning(
-            None,
+        self._show_warning(
             "Invalid Directory",
             "Selected directory must contain executable ffmpeg and ffprobe binaries.",
         )
@@ -360,8 +374,7 @@ class AppBackend(QObject):
             return
         asset_info = self._resolve_btbn_asset()
         if asset_info is None:
-            QMessageBox.warning(
-                None,
+            self._show_warning(
                 "Unsupported OS",
                 "Automatic FFmpeg download is currently supported on Linux and Windows only.",
             )
@@ -397,8 +410,7 @@ class AppBackend(QObject):
     def _on_download_finished(self, install_bin_dir: str) -> None:
         self.settings.setValue("ffmpeg/bin_dir", install_bin_dir)
         self._refresh_ffmpeg_status()
-        QMessageBox.information(
-            None,
+        self._show_info(
             "FFmpeg Downloaded",
             f"FFmpeg was downloaded and installed to:\n{install_bin_dir}",
         )
@@ -406,8 +418,7 @@ class AppBackend(QObject):
     @Slot(str)
     def _on_download_failed(self, error_message: str) -> None:
         self._set_ffmpeg_status("error", "FFmpeg download failed.")
-        QMessageBox.critical(
-            None,
+        self._show_critical(
             "Download Failed",
             f"Could not download/install FFmpeg.\n\n{error_message}",
         )
@@ -437,13 +448,38 @@ class AppBackend(QObject):
     @Slot(result=bool)
     def requestClose(self) -> bool:
         if self.download_thread is not None and self.download_thread.isRunning():
-            QMessageBox.information(
-                None,
+            self._show_info(
                 "Download in Progress",
                 "Please wait for FFmpeg download to finish before closing the app.",
             )
             return False
         return True
+
+    def _show_message(self, icon: QMessageBox.Icon, title: str, text: str) -> None:
+        box = QMessageBox()
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setModal(False)
+        box.setWindowModality(Qt.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._open_message_boxes.append(box)
+        box.finished.connect(lambda _result, b=box: self._cleanup_message_box(b))
+        box.show()
+
+    def _cleanup_message_box(self, box: QMessageBox) -> None:
+        if box in self._open_message_boxes:
+            self._open_message_boxes.remove(box)
+
+    def _show_info(self, title: str, text: str) -> None:
+        self._show_message(QMessageBox.Icon.Information, title, text)
+
+    def _show_warning(self, title: str, text: str) -> None:
+        self._show_message(QMessageBox.Icon.Warning, title, text)
+
+    def _show_critical(self, title: str, text: str) -> None:
+        self._show_message(QMessageBox.Icon.Critical, title, text)
 
     def _set_ffmpeg_status(self, level: str, text: str) -> None:
         if self._ffmpeg_status != text:

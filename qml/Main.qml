@@ -124,8 +124,11 @@ ApplicationWindow {
             Button {
                 text: "FFmpeg Settings"
                 onClicked: {
-                    ffmpegSettingsWindow.visible = true
-                    ffmpegSettingsWindow.raise()
+                    if (!ffmpegSettingsWindow.visible) {
+                        ffmpegSettingsWindow.show()
+                    } else if (ffmpegSettingsWindow.visibility === Window.Minimized) {
+                        ffmpegSettingsWindow.showNormal()
+                    }
                     ffmpegSettingsWindow.requestActivate()
                 }
             }
@@ -585,87 +588,8 @@ ApplicationWindow {
 
     }
 
-    Window {
+    FfmpegSettingsWindow {
         id: ffmpegSettingsWindow
-        visible: false
-        width: 700
-        height: 180
-        minimumWidth: 560
-        minimumHeight: 160
-        title: "FFmpeg Settings"
-        transientParent: root
-        flags: Qt.Window
-            | Qt.WindowMinimizeButtonHint
-            | Qt.WindowMaximizeButtonHint
-            | Qt.WindowCloseButtonHint
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#ffffff"
-
-            Rectangle {
-                id: ffmpegCardShadow
-                x: 8
-                y: 8
-                width: parent.width - 12
-                height: parent.height - 12
-                radius: 10
-                color: "transparent"
-                z: 0
-            }
-
-            Rectangle {
-                id: ffmpegCard
-                anchors.fill: parent
-                anchors.margins: 0
-                radius: 0
-                color: "#ffffff"
-                border.width: 0
-                z: 1
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 14
-                    spacing: 10
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Label { text: "Status:" }
-                        Rectangle {
-                            width: 10
-                            height: 10
-                            radius: 5
-                            color: statusBorder(backend.ffmpegStatusLevel)
-                            border.width: 1
-                            border.color: statusFg(backend.ffmpegStatusLevel)
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: backend.ffmpegStatus
-                            wrapMode: Text.Wrap
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Button {
-                            text: "Download FFmpeg"
-                            enabled: !backend.isDownloading
-                            onClicked: backend.downloadFfmpeg()
-                        }
-                        Button {
-                            text: "Select FFmpeg Directory"
-                            enabled: !backend.isDownloading
-                            onClicked: backend.selectFfmpegDirectory()
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                }
-            }
-        }
+        backend: root.backend
     }
 }
