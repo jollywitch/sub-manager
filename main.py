@@ -189,15 +189,46 @@ class AppBackend(QObject):
         self.videoFilesChanged.emit()
 
     def _inspect_stream_languages(self, file_path: str) -> tuple[list[str], list[str]]:
-        ffprobe_exe = self.ffprobe_path or shutil.which("ffprobe")
-        if not ffprobe_exe:
+        payload = self._run_ffprobe_json(file_path)
+        if payload is None:
+            return (["N/A"], ["N/A"])
+        streams = payload.get("streams", [])
+        if not isinstance(streams, list):
             return (["N/A"], ["N/A"])
 
+        audio_languages: list[str] = []
+        subtitle_languages: list[str] = []
+
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            codec_type = str(stream.get("codec_type", "")).lower()
+            tags = stream.get("tags")
+            language = "und"
+            if isinstance(tags, dict):
+                tag_lang = tags.get("language")
+                if isinstance(tag_lang, str) and tag_lang.strip():
+                    language = tag_lang.strip().lower()
+            if codec_type == "audio":
+                audio_languages.append(language)
+            elif codec_type == "subtitle":
+                subtitle_languages.append(language)
+
+        return (
+            self._format_language_items(audio_languages),
+            self._format_language_items(subtitle_languages),
+        )
+
+    def _run_ffprobe_json(self, file_path: str) -> dict[str, object] | None:
+        ffprobe_exe = self.ffprobe_path or shutil.which("ffprobe")
+        if not ffprobe_exe:
+            return None
         command = [
             ffprobe_exe,
             "-v",
             "error",
             "-show_streams",
+            "-show_format",
             "-of",
             "json",
             file_path,
@@ -205,39 +236,100 @@ class AppBackend(QObject):
         try:
             result = subprocess.run(command, capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return (["N/A"], ["N/A"])
-
+                return None
             payload = json.loads(result.stdout or "{}")
-            streams = payload.get("streams", [])
-            audio_languages: list[str] = []
-            subtitle_languages: list[str] = []
-
-            for stream in streams:
-                if not isinstance(stream, dict):
-                    continue
-                codec_type = str(stream.get("codec_type", "")).lower()
-                tags = stream.get("tags")
-                language = "und"
-                if isinstance(tags, dict):
-                    tag_lang = tags.get("language")
-                    if isinstance(tag_lang, str) and tag_lang.strip():
-                        language = tag_lang.strip().lower()
-                if codec_type == "audio":
-                    audio_languages.append(language)
-                elif codec_type == "subtitle":
-                    subtitle_languages.append(language)
-
-            return (
-                self._format_language_items(audio_languages),
-                self._format_language_items(subtitle_languages),
-            )
+            if not isinstance(payload, dict):
+                return None
+            return payload
         except Exception:
-            return (["N/A"], ["N/A"])
+            return None
 
     def _format_language_items(self, languages: list[str]) -> list[str]:
         if not languages:
             return ["-"]
         return languages
+
+    @Slot(str, str)
+    def editSubtitle(self, file_path: str, language: str) -> None:
+        _ = (file_path, language)
+        return
+
+    @Slot(str, str)
+    def showSubtitleInfo(self, file_path: str, language: str) -> None:
+        payload = self._run_ffprobe_json(file_path)
+        if payload is None:
+            QMessageBox.warning(
+                None,
+                "Subtitle Info",
+                "Could not read stream info with ffprobe.",
+            )
+            return
+
+        streams = payload.get("streams", [])
+        if not isinstance(streams, list):
+            QMessageBox.information(None, "Subtitle Info", "No stream data found.")
+            return
+
+        lang_filter = language.strip().lower() if language else ""
+        subtitle_streams: list[dict[str, object]] = []
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            if str(stream.get("codec_type", "")).lower() != "subtitle":
+                continue
+            if lang_filter and lang_filter not in {"-", "n/a"}:
+                tags = stream.get("tags")
+                stream_lang = ""
+                if isinstance(tags, dict):
+                    tag_lang = tags.get("language")
+                    if isinstance(tag_lang, str):
+                        stream_lang = tag_lang.strip().lower()
+                if stream_lang != lang_filter:
+                    continue
+            subtitle_streams.append(stream)
+
+        if not subtitle_streams:
+            QMessageBox.information(
+                None,
+                "Subtitle Info",
+                f"No subtitle streams found for '{language}'.",
+            )
+            return
+
+        lines: list[str] = []
+        for stream in subtitle_streams:
+            stream_index = stream.get("index", "?")
+            codec_name = stream.get("codec_name", "unknown")
+            tags = stream.get("tags")
+            disposition = stream.get("disposition")
+            stream_lang = "und"
+            stream_title = "-"
+            if isinstance(tags, dict):
+                tag_lang = tags.get("language")
+                if isinstance(tag_lang, str) and tag_lang.strip():
+                    stream_lang = tag_lang.strip().lower()
+                tag_title = tags.get("title")
+                if isinstance(tag_title, str) and tag_title.strip():
+                    stream_title = tag_title.strip()
+            default_flag = 0
+            forced_flag = 0
+            if isinstance(disposition, dict):
+                default_flag = int(disposition.get("default", 0) or 0)
+                forced_flag = int(disposition.get("forced", 0) or 0)
+
+            lines.append(
+                f"Stream #{stream_index}\n"
+                f"  codec: {codec_name}\n"
+                f"  language: {stream_lang}\n"
+                f"  title: {stream_title}\n"
+                f"  default: {default_flag}, forced: {forced_flag}"
+            )
+
+        QMessageBox.information(
+            None,
+            "Subtitle Info",
+            f"File: {os.path.basename(file_path)}\n\n" + "\n\n".join(lines),
+        )
 
     @Slot()
     def selectFfmpegDirectory(self) -> None:

@@ -314,6 +314,7 @@ ApplicationWindow {
                                 id: rowContent
                                 anchors.fill: parent
                                 anchors.margins: 8
+                                property string filePath: modelData.path
 
                                 Item {
                                     x: 0
@@ -405,7 +406,7 @@ ApplicationWindow {
                                     x: root.selectColumnWidth + (root.separatorWidth * 3) + root.fileColumnWidth + root.audioColumnWidth
                                     width: root.subtitleColumnWidth
                                     height: parent.height
-                                    clip: true
+                                    clip: false
 
                                     Flickable {
                                         anchors.fill: parent
@@ -424,19 +425,125 @@ ApplicationWindow {
                                             Repeater {
                                                 model: modelData.subtitle_language_items
                                                 delegate: Rectangle {
+                                                    property string chipLanguage: modelData
+                                                    property bool keepMenuVisible: false
                                                     radius: 10
                                                     height: 24
                                                     color: "#f0f8ee"
                                                     border.width: 1
                                                     border.color: "#b8d6ae"
-                                                    implicitWidth: subtitleChipText.implicitWidth + 14
+                                                    width: Math.max(subtitleChipText.implicitWidth + 14, 48)
 
                                                     Text {
                                                         id: subtitleChipText
                                                         anchors.centerIn: parent
-                                                        text: modelData
+                                                        text: chipLanguage
                                                         font.pixelSize: 12
                                                         color: "#244a1f"
+                                                    }
+
+                                                    HoverHandler {
+                                                        id: subtitleChipHover
+                                                        onHoveredChanged: {
+                                                            if (hovered) {
+                                                                subtitleMenuHideDelay.stop()
+                                                                keepMenuVisible = true
+                                                            } else {
+                                                                subtitleMenuHideDelay.restart()
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Timer {
+                                                        id: subtitleMenuHideDelay
+                                                        interval: 280
+                                                        repeat: false
+                                                        onTriggered: {
+                                                            if (!subtitleChipHover.hovered
+                                                                && !subtitleMenuHover.hovered
+                                                                && !editSubtitleButton.hovered
+                                                                && !infoSubtitleButton.hovered
+                                                                && !editSubtitleButton.down
+                                                                && !infoSubtitleButton.down) {
+                                                                keepMenuVisible = false
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Rectangle {
+                                                        x: parent.width + 4
+                                                        y: -2
+                                                        width: 94
+                                                        height: 70
+                                                        radius: 6
+                                                        color: "#ffffff"
+                                                        border.width: 1
+                                                        border.color: "#c7c7c7"
+                                                        visible: keepMenuVisible
+                                                            || subtitleChipHover.hovered
+                                                            || subtitleMenuHover.hovered
+                                                            || editSubtitleButton.hovered
+                                                            || infoSubtitleButton.hovered
+                                                            || editSubtitleButton.down
+                                                            || infoSubtitleButton.down
+                                                        z: 3
+
+                                                        HoverHandler {
+                                                            id: subtitleMenuHover
+                                                            onHoveredChanged: {
+                                                                if (hovered) {
+                                                                    subtitleMenuHideDelay.stop()
+                                                                    keepMenuVisible = true
+                                                                } else {
+                                                                    subtitleMenuHideDelay.restart()
+                                                                }
+                                                            }
+                                                        }
+
+                                                        Column {
+                                                            anchors.fill: parent
+                                                            anchors.margins: 6
+                                                            spacing: 6
+
+                                                            Button {
+                                                                id: editSubtitleButton
+                                                                width: parent.width
+                                                                height: 26
+                                                                text: "Edit"
+                                                                padding: 4
+                                                                font.pixelSize: 12
+                                                                hoverEnabled: true
+                                                                flat: true
+                                                                background: Rectangle {
+                                                                    color: "transparent"
+                                                                    border.width: 0
+                                                                }
+                                                                onPressed: {
+                                                                    subtitleMenuHideDelay.stop()
+                                                                    keepMenuVisible = true
+                                                                }
+                                                                onClicked: backend.editSubtitle(rowContent.filePath, chipLanguage)
+                                                            }
+                                                            Button {
+                                                                id: infoSubtitleButton
+                                                                width: parent.width
+                                                                height: 26
+                                                                text: "Info"
+                                                                padding: 4
+                                                                font.pixelSize: 12
+                                                                hoverEnabled: true
+                                                                flat: true
+                                                                background: Rectangle {
+                                                                    color: "transparent"
+                                                                    border.width: 0
+                                                                }
+                                                                onPressed: {
+                                                                    subtitleMenuHideDelay.stop()
+                                                                    keepMenuVisible = true
+                                                                }
+                                                                onClicked: backend.showSubtitleInfo(rowContent.filePath, chipLanguage)
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
