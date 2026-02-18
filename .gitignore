@@ -12,3 +12,4 @@ wheels/
 # Project-local generated/downloaded assets
 AGENTS.md
 tools/
+logs/

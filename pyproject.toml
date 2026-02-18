@@ -5,5 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "huggingface_hub>=0.28.0",
+    "Pillow>=10.4.0",
     "PySide6>=6.10.0",
+    "torch>=2.6.0",
+    "torchvision>=0.25.0",
+    "transformers @ git+https://github.com/huggingface/transformers.git",
 ]
