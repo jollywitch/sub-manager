@@ -6,18 +6,189 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 import json
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QObject, Property, QSettings, QThread, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 VIDEO_FILTER = "Video Files (*.mp4 *.mkv *.avi *.mov *.m4v *.webm)"
+TEXT_BASED_SUBTITLE_CODECS = {
+    "subrip",
+    "ass",
+    "ssa",
+    "webvtt",
+    "mov_text",
+    "text",
+    "ttml",
+}
+
+
+class SubtitleEditorWindow(QWidget):
+    def __init__(
+        self,
+        file_path: str,
+        stream_index: int,
+        language: str,
+        codec_name: str,
+        subtitle_text: str,
+        save_embedded_callback: Callable[[str, int, str], tuple[bool, str]],
+    ) -> None:
+        super().__init__(None, Qt.Window)
+        self._source_file_path = file_path
+        self._stream_index = stream_index
+        self._save_embedded_callback = save_embedded_callback
+        self._confirm_save_box: QMessageBox | None = None
+        self._export_dialog: QFileDialog | None = None
+        self._baseline_text = subtitle_text
+
+        self.setWindowTitle(f"Subtitle Editor - {os.path.basename(file_path)} [s:{stream_index}]")
+        self.setWindowModality(Qt.NonModal)
+        self.resize(860, 620)
+
+        layout = QVBoxLayout(self)
+        details = QLabel(
+            f"File: {os.path.basename(file_path)} | Stream: #{stream_index} | Language: {language or 'und'} | Codec: {codec_name}"
+        )
+        layout.addWidget(details)
+
+        self.editor = QPlainTextEdit()
+        self.editor.setPlainText(subtitle_text)
+        self.editor.textChanged.connect(self._update_save_button_state)
+        layout.addWidget(self.editor)
+
+        button_row = QHBoxLayout()
+        self.save_embedded_btn = QPushButton("Save Embedded")
+        self.save_embedded_btn.clicked.connect(self._save_embedded)
+        self.save_embedded_btn.setEnabled(False)
+        button_row.addWidget(self.save_embedded_btn)
+
+        export_srt_btn = QPushButton("Export SRT")
+        export_srt_btn.clicked.connect(self._export_srt)
+        button_row.addWidget(export_srt_btn)
+
+        button_row.addStretch(1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
+
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+        self._update_save_button_state()
+
+    def _update_save_button_state(self) -> None:
+        self.save_embedded_btn.setEnabled(self.editor.toPlainText() != self._baseline_text)
+
+    def _save_embedded(self) -> None:
+        if self._confirm_save_box is not None and self._confirm_save_box.isVisible():
+            self._confirm_save_box.raise_()
+            self._confirm_save_box.activateWindow()
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Confirm Overwrite")
+        box.setText(
+            "This will overwrite the original video file with updated embedded subtitles.\n\nContinue?"
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.setModal(False)
+        box.setWindowModality(Qt.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.buttonClicked.connect(self._on_confirm_save_clicked)
+        box.finished.connect(self._cleanup_confirm_save_box)
+        self._confirm_save_box = box
+        box.open()
+
+    def _on_confirm_save_clicked(self, button: object) -> None:
+        if self._confirm_save_box is None:
+            return
+        standard_button = self._confirm_save_box.standardButton(button)
+        if standard_button != QMessageBox.StandardButton.Yes:
+            return
+
+        self._run_save_embedded()
+
+    @Slot(int)
+    def _cleanup_confirm_save_box(self, _result: int) -> None:
+        self._confirm_save_box = None
+
+    def _run_save_embedded(self) -> None:
+        self.save_embedded_btn.setEnabled(False)
+        ok, message = self._save_embedded_callback(
+            self._source_file_path,
+            self._stream_index,
+            self.editor.toPlainText(),
+        )
+        self.save_embedded_btn.setEnabled(True)
+        if ok:
+            self._baseline_text = self.editor.toPlainText()
+            self._update_save_button_state()
+            self.status_label.setText(f"Saved embedded subtitle: {message}")
+            return
+        self.status_label.setText(f"Save failed: {message}")
+
+    def _export_srt(self) -> None:
+        if self._export_dialog is not None and self._export_dialog.isVisible():
+            self._export_dialog.raise_()
+            self._export_dialog.activateWindow()
+            return
+
+        dialog = QFileDialog(self, "Export Subtitle as SRT")
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setFileMode(QFileDialog.AnyFile)
+        dialog.setNameFilter("SubRip Subtitle (*.srt);;All Files (*)")
+        dialog.setDefaultSuffix("srt")
+        dialog.selectFile(self._default_export_path())
+        dialog.setModal(False)
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.fileSelected.connect(self._on_export_file_selected)
+        dialog.finished.connect(self._cleanup_export_dialog)
+        self._export_dialog = dialog
+        dialog.open()
+
+    def _default_export_path(self) -> str:
+        source = Path(self._source_file_path)
+        return str(source.with_name(f"{source.stem}.srt"))
+
+    @Slot(str)
+    def _on_export_file_selected(self, selected_path: str) -> None:
+        if not selected_path:
+            return
+        export_path = Path(selected_path)
+        if export_path.suffix.lower() != ".srt":
+            export_path = export_path.with_suffix(".srt")
+        try:
+            export_path.write_text(self.editor.toPlainText(), encoding="utf-8")
+        except Exception as exc:
+            self.status_label.setText(f"Export failed: {exc}")
+            return
+        self.status_label.setText(f"Exported SRT: {export_path}")
+
+    @Slot(int)
+    def _cleanup_export_dialog(self, _result: int) -> None:
+        self._export_dialog = None
 
 
 class FFmpegDownloadWorker(QObject):
@@ -116,7 +287,9 @@ class AppBackend(QObject):
         self.download_thread: QThread | None = None
         self.download_worker: FFmpegDownloadWorker | None = None
         self._add_videos_dialog: QFileDialog | None = None
-        self._open_message_boxes: list[QMessageBox] = []
+        self._active_message_box: QMessageBox | None = None
+        self._subtitle_editor: SubtitleEditorWindow | None = None
+        self._subtitle_editor_key: str | None = None
         self._ffmpeg_status = ""
         self._ffmpeg_status_level = "warn"
         self._downloading = False
@@ -212,36 +385,49 @@ class AppBackend(QObject):
             item["checked"] = checked
         self.videoFilesChanged.emit()
 
-    def _inspect_stream_languages(self, file_path: str) -> tuple[list[str], list[str]]:
+    def _inspect_stream_languages(
+        self, file_path: str
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         payload = self._run_ffprobe_json(file_path)
         if payload is None:
-            return (["N/A"], ["N/A"])
+            return ([{"label": "N/A", "stream_index": -1}], [{"label": "N/A", "stream_index": -1}])
         streams = payload.get("streams", [])
         if not isinstance(streams, list):
-            return (["N/A"], ["N/A"])
+            return ([{"label": "N/A", "stream_index": -1}], [{"label": "N/A", "stream_index": -1}])
 
-        audio_languages: list[str] = []
-        subtitle_languages: list[str] = []
+        audio_streams: list[dict[str, object]] = []
+        subtitle_streams: list[dict[str, object]] = []
 
-        for stream in streams:
+        for fallback_index, stream in enumerate(streams):
             if not isinstance(stream, dict):
                 continue
             codec_type = str(stream.get("codec_type", "")).lower()
-            tags = stream.get("tags")
-            language = "und"
-            if isinstance(tags, dict):
-                tag_lang = tags.get("language")
-                if isinstance(tag_lang, str) and tag_lang.strip():
-                    language = tag_lang.strip().lower()
+            stream_index = self._stream_index(stream, fallback_index)
+            language = self._stream_language(stream)
             if codec_type == "audio":
-                audio_languages.append(language)
+                audio_streams.append(
+                    {
+                        "label": f"{language} #{stream_index}",
+                        "stream_index": stream_index,
+                        "language": language,
+                    }
+                )
             elif codec_type == "subtitle":
-                subtitle_languages.append(language)
+                codec_name = str(stream.get("codec_name", "unknown")).strip().lower() or "unknown"
+                subtitle_streams.append(
+                    {
+                        "label": f"{language} #{stream_index}",
+                        "stream_index": stream_index,
+                        "language": language,
+                        "codec_name": codec_name,
+                    }
+                )
 
-        return (
-            self._format_language_items(audio_languages),
-            self._format_language_items(subtitle_languages),
-        )
+        if not audio_streams:
+            audio_streams = [{"label": "-", "stream_index": -1}]
+        if not subtitle_streams:
+            subtitle_streams = [{"label": "-", "stream_index": -1}]
+        return (audio_streams, subtitle_streams)
 
     def _run_ffprobe_json(self, file_path: str) -> dict[str, object] | None:
         ffprobe_exe = self.ffprobe_path or shutil.which("ffprobe")
@@ -268,18 +454,85 @@ class AppBackend(QObject):
         except Exception:
             return None
 
-    def _format_language_items(self, languages: list[str]) -> list[str]:
-        if not languages:
-            return ["-"]
-        return languages
+    @Slot(str, int)
+    def editSubtitle(self, file_path: str, stream_index: int) -> None:
+        if stream_index < 0:
+            self._show_info("Subtitle Editor", "No editable subtitle stream selected.")
+            return
 
-    @Slot(str, str)
-    def editSubtitle(self, file_path: str, language: str) -> None:
-        _ = (file_path, language)
-        return
+        payload = self._run_ffprobe_json(file_path)
+        if payload is None:
+            self._show_warning("Subtitle Editor", "Could not read stream info with ffprobe.")
+            return
 
-    @Slot(str, str)
-    def showSubtitleInfo(self, file_path: str, language: str) -> None:
+        streams = payload.get("streams", [])
+        if not isinstance(streams, list):
+            self._show_info("Subtitle Editor", "No stream data found.")
+            return
+
+        stream = self._find_subtitle_stream_by_index(streams, stream_index)
+        if stream is None:
+            self._show_info("Subtitle Editor", f"Subtitle stream #{stream_index} was not found.")
+            return
+
+        codec_name = str(stream.get("codec_name", "unknown")).strip().lower() or "unknown"
+        if codec_name not in TEXT_BASED_SUBTITLE_CODECS:
+            self._show_warning(
+                "Subtitle Editor",
+                f"Stream #{stream_index} uses '{codec_name}', which is not a text-based subtitle codec.",
+            )
+            return
+
+        subtitle_text = self._extract_subtitle_text(file_path, stream_index)
+        if subtitle_text is None:
+            self._show_warning(
+                "Subtitle Editor",
+                "Could not extract subtitle text with ffmpeg.",
+            )
+            return
+
+        editor_key = f"{os.path.abspath(file_path)}::{stream_index}"
+        if self._subtitle_editor is not None and self._subtitle_editor.isVisible():
+            if self._subtitle_editor_key == editor_key:
+                self._subtitle_editor.raise_()
+                self._subtitle_editor.activateWindow()
+                return
+            self._subtitle_editor.raise_()
+            self._subtitle_editor.activateWindow()
+            self._show_info(
+                "Subtitle Editor",
+                "An editor window is already open. Close it before opening another subtitle stream.",
+            )
+            return
+
+        stream_lang = self._stream_language(stream)
+        editor = SubtitleEditorWindow(
+            file_path,
+            stream_index,
+            stream_lang,
+            codec_name,
+            subtitle_text,
+            self._save_embedded_subtitle,
+        )
+        editor.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        editor.destroyed.connect(self._on_subtitle_editor_destroyed)
+        self._subtitle_editor = editor
+        self._subtitle_editor_key = editor_key
+        editor.show()
+        editor.raise_()
+        editor.activateWindow()
+
+    @Slot()
+    def _on_subtitle_editor_destroyed(self) -> None:
+        self._subtitle_editor = None
+        self._subtitle_editor_key = None
+
+    @Slot(str, int)
+    def showSubtitleInfo(self, file_path: str, stream_index: int) -> None:
+        if stream_index < 0:
+            self._show_info("Subtitle Info", "No subtitle stream selected.")
+            return
+
         payload = self._run_ffprobe_json(file_path)
         if payload is None:
             self._show_warning("Subtitle Info", "Could not read stream info with ffprobe.")
@@ -290,61 +543,222 @@ class AppBackend(QObject):
             self._show_info("Subtitle Info", "No stream data found.")
             return
 
-        lang_filter = language.strip().lower() if language else ""
-        subtitle_streams: list[dict[str, object]] = []
-        for stream in streams:
-            if not isinstance(stream, dict):
-                continue
-            if str(stream.get("codec_type", "")).lower() != "subtitle":
-                continue
-            if lang_filter and lang_filter not in {"-", "n/a"}:
-                tags = stream.get("tags")
-                stream_lang = ""
-                if isinstance(tags, dict):
-                    tag_lang = tags.get("language")
-                    if isinstance(tag_lang, str):
-                        stream_lang = tag_lang.strip().lower()
-                if stream_lang != lang_filter:
-                    continue
-            subtitle_streams.append(stream)
-
-        if not subtitle_streams:
-            self._show_info("Subtitle Info", f"No subtitle streams found for '{language}'.")
+        stream = self._find_subtitle_stream_by_index(streams, stream_index)
+        if stream is None:
+            self._show_info("Subtitle Info", f"Subtitle stream #{stream_index} was not found.")
             return
 
-        lines: list[str] = []
-        for stream in subtitle_streams:
-            stream_index = stream.get("index", "?")
-            codec_name = stream.get("codec_name", "unknown")
-            tags = stream.get("tags")
-            disposition = stream.get("disposition")
-            stream_lang = "und"
-            stream_title = "-"
-            if isinstance(tags, dict):
-                tag_lang = tags.get("language")
-                if isinstance(tag_lang, str) and tag_lang.strip():
-                    stream_lang = tag_lang.strip().lower()
-                tag_title = tags.get("title")
-                if isinstance(tag_title, str) and tag_title.strip():
-                    stream_title = tag_title.strip()
-            default_flag = 0
-            forced_flag = 0
-            if isinstance(disposition, dict):
-                default_flag = int(disposition.get("default", 0) or 0)
-                forced_flag = int(disposition.get("forced", 0) or 0)
-
-            lines.append(
+        codec_name = stream.get("codec_name", "unknown")
+        tags = stream.get("tags")
+        disposition = stream.get("disposition")
+        stream_lang = "und"
+        stream_title = "-"
+        if isinstance(tags, dict):
+            tag_lang = tags.get("language")
+            if isinstance(tag_lang, str) and tag_lang.strip():
+                stream_lang = tag_lang.strip().lower()
+            tag_title = tags.get("title")
+            if isinstance(tag_title, str) and tag_title.strip():
+                stream_title = tag_title.strip()
+        default_flag = 0
+        forced_flag = 0
+        if isinstance(disposition, dict):
+            default_flag = int(disposition.get("default", 0) or 0)
+            forced_flag = int(disposition.get("forced", 0) or 0)
+        self._show_info(
+            "Subtitle Info",
+            (
+                f"File: {os.path.basename(file_path)}\n\n"
                 f"Stream #{stream_index}\n"
                 f"  codec: {codec_name}\n"
                 f"  language: {stream_lang}\n"
                 f"  title: {stream_title}\n"
                 f"  default: {default_flag}, forced: {forced_flag}"
-            )
-
-        self._show_info(
-            "Subtitle Info",
-            f"File: {os.path.basename(file_path)}\n\n" + "\n\n".join(lines),
+            ),
         )
+
+    def _find_subtitle_stream_by_index(
+        self, streams: list[object], stream_index: int
+    ) -> dict[str, object] | None:
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            if str(stream.get("codec_type", "")).lower() != "subtitle":
+                continue
+            if self._stream_index(stream, -1) == stream_index:
+                return stream
+        return None
+
+    def _stream_language(self, stream: dict[str, object]) -> str:
+        tags = stream.get("tags")
+        if isinstance(tags, dict):
+            tag_lang = tags.get("language")
+            if isinstance(tag_lang, str) and tag_lang.strip():
+                return tag_lang.strip().lower()
+        return "und"
+
+    def _stream_index(self, stream: dict[str, object], fallback: int) -> int:
+        value = stream.get("index", fallback)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _extract_subtitle_text(self, file_path: str, stream_index: int) -> str | None:
+        ffmpeg_exe = self.ffmpeg_path or shutil.which("ffmpeg")
+        if not ffmpeg_exe:
+            return None
+        command = [
+            ffmpeg_exe,
+            "-v",
+            "error",
+            "-nostdin",
+            "-i",
+            file_path,
+            "-map",
+            f"0:{stream_index}",
+            "-f",
+            "srt",
+            "-",
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=False, check=False)
+            if result.returncode != 0:
+                return None
+            raw_text = result.stdout or b""
+            for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+                try:
+                    return raw_text.decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+            return raw_text.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    def _save_embedded_subtitle(
+        self, file_path: str, stream_index: int, subtitle_text: str
+    ) -> tuple[bool, str]:
+        ffmpeg_exe = self.ffmpeg_path or shutil.which("ffmpeg")
+        if not ffmpeg_exe:
+            return (False, "ffmpeg binary not found.")
+
+        payload = self._run_ffprobe_json(file_path)
+        if payload is None:
+            return (False, "Could not inspect file streams with ffprobe.")
+        streams = payload.get("streams", [])
+        if not isinstance(streams, list):
+            return (False, "Invalid stream metadata from ffprobe.")
+
+        target_stream = self._find_subtitle_stream_by_index(streams, stream_index)
+        if target_stream is None:
+            return (False, f"Subtitle stream #{stream_index} not found.")
+
+        subtitle_stream_count = 0
+        for stream in streams:
+            if isinstance(stream, dict) and str(stream.get("codec_type", "")).lower() == "subtitle":
+                subtitle_stream_count += 1
+        if subtitle_stream_count == 0:
+            return (False, "No subtitle streams found.")
+
+        output_codec = self._output_subtitle_codec_for_container(file_path)
+        if output_codec is None:
+            return (False, "Container does not support automatic subtitle replacement.")
+
+        language = self._stream_language(target_stream)
+        title = self._stream_title(target_stream)
+        new_subtitle_index = subtitle_stream_count - 1
+
+        source_path = Path(file_path)
+        with tempfile.TemporaryDirectory(prefix="sub_manager_") as tmp_dir:
+            temp_subtitle_path = Path(tmp_dir) / "edited_subtitle.srt"
+            try:
+                temp_subtitle_path.write_text(subtitle_text, encoding="utf-8")
+            except Exception as exc:
+                return (False, f"Could not prepare temporary subtitle file: {exc}")
+
+            temp_output_path = source_path.parent / (
+                f".{source_path.stem}.submgr_tmp{source_path.suffix}"
+            )
+            if temp_output_path.exists():
+                try:
+                    temp_output_path.unlink()
+                except Exception as exc:
+                    return (False, f"Could not clear temporary output file: {exc}")
+
+            command = [
+                ffmpeg_exe,
+                "-y",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                file_path,
+                "-f",
+                "srt",
+                "-i",
+                str(temp_subtitle_path),
+                "-map",
+                "0",
+                "-map",
+                f"-0:{stream_index}",
+                "-map",
+                "1:0",
+                "-c",
+                "copy",
+                f"-c:s:{new_subtitle_index}",
+                output_codec,
+                f"-metadata:s:s:{new_subtitle_index}",
+                f"language={language}",
+            ]
+            if title:
+                command.extend(
+                    [
+                        f"-metadata:s:s:{new_subtitle_index}",
+                        f"title={title}",
+                    ]
+                )
+            command.append(str(temp_output_path))
+
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+            except Exception as exc:
+                return (False, f"Could not run ffmpeg: {exc}")
+            if result.returncode != 0:
+                try:
+                    if temp_output_path.exists():
+                        temp_output_path.unlink()
+                except Exception:
+                    pass
+                error_message = (result.stderr or "Unknown ffmpeg error").strip()
+                return (False, error_message)
+            try:
+                os.replace(temp_output_path, source_path)
+            except Exception as exc:
+                try:
+                    if temp_output_path.exists():
+                        temp_output_path.unlink()
+                except Exception:
+                    pass
+                return (False, f"Could not overwrite original file: {exc}")
+        return (True, str(source_path))
+
+    def _output_subtitle_codec_for_container(self, file_path: str) -> str | None:
+        ext = Path(file_path).suffix.lower()
+        if ext in {".mp4", ".m4v", ".mov"}:
+            return "mov_text"
+        if ext in {".mkv", ".avi"}:
+            return "srt"
+        if ext == ".webm":
+            return "webvtt"
+        return None
+
+    def _stream_title(self, stream: dict[str, object]) -> str:
+        tags = stream.get("tags")
+        if isinstance(tags, dict):
+            tag_title = tags.get("title")
+            if isinstance(tag_title, str) and tag_title.strip():
+                return tag_title.strip()
+        return ""
 
     @Slot()
     def selectFfmpegDirectory(self) -> None:
@@ -456,6 +870,15 @@ class AppBackend(QObject):
         return True
 
     def _show_message(self, icon: QMessageBox.Icon, title: str, text: str) -> None:
+        box = self._active_message_box
+        if box is not None and box.isVisible():
+            box.setIcon(icon)
+            box.setWindowTitle(title)
+            box.setText(text)
+            box.raise_()
+            box.activateWindow()
+            return
+
         box = QMessageBox()
         box.setIcon(icon)
         box.setWindowTitle(title)
@@ -464,13 +887,13 @@ class AppBackend(QObject):
         box.setModal(False)
         box.setWindowModality(Qt.NonModal)
         box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self._open_message_boxes.append(box)
-        box.finished.connect(lambda _result, b=box: self._cleanup_message_box(b))
+        self._active_message_box = box
+        box.finished.connect(self._cleanup_message_box)
         box.show()
 
-    def _cleanup_message_box(self, box: QMessageBox) -> None:
-        if box in self._open_message_boxes:
-            self._open_message_boxes.remove(box)
+    @Slot(int)
+    def _cleanup_message_box(self, _result: int) -> None:
+        self._active_message_box = None
 
     def _show_info(self, title: str, text: str) -> None:
         self._show_message(QMessageBox.Icon.Information, title, text)

@@ -415,19 +415,27 @@ ApplicationWindow {
                                             Repeater {
                                                 model: modelData.audio_language_items
                                                 delegate: Rectangle {
+                                                    id: audioChipRect
                                                     radius: 10
                                                     height: 24
-                                                    color: "#eef3ff"
+                                                    color: audioChipMouseArea.containsMouse ? "#dfeaff" : "#eef3ff"
                                                     border.width: 1
-                                                    border.color: "#b5c7f5"
+                                                    border.color: audioChipMouseArea.containsMouse ? "#8faaf0" : "#b5c7f5"
                                                     implicitWidth: chipText.implicitWidth + 14
 
                                                     Text {
                                                         id: chipText
                                                         anchors.centerIn: parent
-                                                        text: modelData
+                                                        text: modelData.label
                                                         font.pixelSize: 12
-                                                        color: "#1f2d52"
+                                                        color: audioChipMouseArea.containsMouse ? "#182748" : "#1f2d52"
+                                                    }
+
+                                                    MouseArea {
+                                                        id: audioChipMouseArea
+                                                        anchors.fill: parent
+                                                        hoverEnabled: true
+                                                        cursorShape: Qt.PointingHandCursor
                                                     }
                                                 }
                                             }
@@ -465,25 +473,32 @@ ApplicationWindow {
                                                 model: modelData.subtitle_language_items
                                                 delegate: Rectangle {
                                                     id: subtitleChipRect
-                                                    property string chipLanguage: modelData
+                                                    property string chipLabel: modelData.label
+                                                    property int streamIndex: Number(modelData.stream_index)
                                                     radius: 10
                                                     height: 24
-                                                    color: "#f0f8ee"
+                                                    color: (subtitleChipMouseArea.containsMouse || subtitleMenuPopup.visible) ? "#e4f2df" : "#f0f8ee"
                                                     border.width: 1
-                                                    border.color: "#b8d6ae"
+                                                    border.color: (subtitleChipMouseArea.containsMouse || subtitleMenuPopup.visible) ? "#8fbe80" : "#b8d6ae"
                                                     width: Math.max(subtitleChipText.implicitWidth + 14, 48)
 
                                                     Text {
                                                         id: subtitleChipText
                                                         anchors.centerIn: parent
-                                                        text: chipLanguage
+                                                        text: chipLabel
                                                         font.pixelSize: 12
-                                                        color: "#244a1f"
+                                                        color: (subtitleChipMouseArea.containsMouse || subtitleMenuPopup.visible) ? "#173514" : "#244a1f"
                                                     }
 
                                                     MouseArea {
+                                                        id: subtitleChipMouseArea
                                                         anchors.fill: parent
+                                                        hoverEnabled: true
+                                                        cursorShape: streamIndex >= 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
                                                         onClicked: {
+                                                            if (streamIndex < 0) {
+                                                                return
+                                                            }
                                                             if (subtitleMenuPopup.visible) {
                                                                 subtitleMenuPopup.close()
                                                             } else {
@@ -540,7 +555,7 @@ ApplicationWindow {
                                                                     border.width: 0
                                                                 }
                                                                 onClicked: {
-                                                                    backend.editSubtitle(rowContent.filePath, chipLanguage)
+                                                                    backend.editSubtitle(rowContent.filePath, streamIndex)
                                                                     subtitleMenuPopup.close()
                                                                 }
                                                             }
@@ -558,7 +573,7 @@ ApplicationWindow {
                                                                     border.width: 0
                                                                 }
                                                                 onClicked: {
-                                                                    backend.showSubtitleInfo(rowContent.filePath, chipLanguage)
+                                                                    backend.showSubtitleInfo(rowContent.filePath, streamIndex)
                                                                     subtitleMenuPopup.close()
                                                                 }
                                                             }
