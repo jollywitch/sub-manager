@@ -17,13 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, Property, QSettings, QThread, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Property, QSettings, QThread, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QHBoxLayout,
+    QLineEdit,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -225,6 +226,64 @@ class SubtitleEditorWindow(QWidget):
         self._export_dialog = None
 
 
+class HfTokenInputWindow(QWidget):
+    def __init__(
+        self,
+        on_save: Callable[[str], None],
+        on_cancel: Callable[[], None],
+    ) -> None:
+        super().__init__(None, Qt.Window)
+        self._on_save = on_save
+        self._on_cancel = on_cancel
+        self._saved = False
+        self.setWindowTitle("Set HF Token")
+        self.resize(460, 140)
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(10)
+
+        helper_label = QLabel(
+            "Enter HF_TOKEN for GLM-OCR download. The token is stored in app settings."
+        )
+        helper_label.setWordWrap(True)
+        root_layout.addWidget(helper_label)
+
+        self.token_edit = QLineEdit()
+        self.token_edit.setPlaceholderText("hf_...")
+        self.token_edit.setEchoMode(QLineEdit.Password)
+        root_layout.addWidget(self.token_edit)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self.cancel_button = QPushButton("Cancel")
+        self.save_button = QPushButton("Save and Continue")
+        button_row.addWidget(self.cancel_button)
+        button_row.addWidget(self.save_button)
+        root_layout.addLayout(button_row)
+
+        self.status_label = QLabel("")
+        root_layout.addWidget(self.status_label)
+
+        self.cancel_button.clicked.connect(self.close)
+        self.save_button.clicked.connect(self._save)
+
+    @Slot()
+    def _save(self) -> None:
+        token = self.token_edit.text().strip()
+        if not token:
+            self.status_label.setText("HF token is required to continue.")
+            return
+        self._saved = True
+        self._on_save(token)
+        self.close()
+
+    def closeEvent(self, event: object) -> None:  # type: ignore[override]
+        if not self._saved:
+            self._on_cancel()
+        super().closeEvent(event)  # type: ignore[arg-type]
+
+
 class FFmpegDownloadWorker(QObject):
     progress = Signal(str)
     finished = Signal(str)
@@ -302,6 +361,46 @@ class FFmpegDownloadWorker(QObject):
             if found_ffmpeg and found_ffprobe:
                 break
         return found_ffmpeg, found_ffprobe
+
+
+class GlmOcrModelDownloadWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, model_id: str) -> None:
+        super().__init__()
+        self.model_id = model_id
+        self._cancel_requested = False
+
+    @Slot()
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    @Slot()
+    def run(self) -> None:
+        if self._cancel_requested:
+            self.failed.emit("GLM-OCR download cancelled.")
+            return
+        try:
+            from huggingface_hub import snapshot_download  # type: ignore
+        except Exception as exc:
+            self.failed.emit(
+                "GLM-OCR dependencies are missing. Install: huggingface_hub."
+            )
+            return
+        try:
+            if self._cancel_requested:
+                self.failed.emit("GLM-OCR download cancelled.")
+                return
+            self.progress.emit("Downloading or reusing GLM-OCR model files...")
+            local_model_path = snapshot_download(repo_id=self.model_id, resume_download=True)
+            if self._cancel_requested:
+                self.failed.emit("GLM-OCR download cancelled.")
+                return
+            self.finished.emit(str(local_model_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class ImageSubtitleOcrWorker(QObject):
@@ -1062,6 +1161,11 @@ class AppBackend(QObject):
     videoFilesChanged = Signal()
     ffmpegStatusChanged = Signal()
     ffmpegStatusLevelChanged = Signal()
+    hfTokenStatusChanged = Signal()
+    hfTokenStatusLevelChanged = Signal()
+    hfTokenPreviewChanged = Signal()
+    glmOcrModelStatusChanged = Signal()
+    glmOcrModelStatusLevelChanged = Signal()
     downloadingChanged = Signal()
     windowGeometryChanged = Signal()
 
@@ -1074,10 +1178,27 @@ class AppBackend(QObject):
         self.ffprobe_path: str | None = None
         self.download_thread: QThread | None = None
         self.download_worker: FFmpegDownloadWorker | None = None
+        self._glm_download_thread: QThread | None = None
+        self._glm_download_worker: GlmOcrModelDownloadWorker | None = None
+        self._glm_download_progress_box: QMessageBox | None = None
+        self._glm_download_progress_dismissed = False
+        self._glm_download_cancel_requested = False
         self._add_videos_dialog: QFileDialog | None = None
         self._active_message_box: QMessageBox | None = None
         self._subtitle_editor: SubtitleEditorWindow | None = None
         self._subtitle_editor_key: str | None = None
+        self._ffmpeg_override_box: QMessageBox | None = None
+        self._ffmpeg_override_download_button: QPushButton | None = None
+        self._ffmpeg_override_use_existing_button: QPushButton | None = None
+        self._ffmpeg_override_decided = False
+        self._glm_startup_prompt_box: QMessageBox | None = None
+        self._glm_startup_allow_button: QPushButton | None = None
+        self._hf_token_prompt_box: QMessageBox | None = None
+        self._hf_token_prompt_set_button: QPushButton | None = None
+        self._hf_token_prompt_continue_button: QPushButton | None = None
+        self._pending_glm_download_action: Callable[[], None] | None = None
+        self._hf_token_followup_action: Callable[[], None] | None = None
+        self._hf_token_window: HfTokenInputWindow | None = None
         self._ocr_permission_box: QMessageBox | None = None
         self._ocr_progress_box: QMessageBox | None = None
         self._ocr_thread: QThread | None = None
@@ -1091,6 +1212,11 @@ class AppBackend(QObject):
         self._ocr_srt_cache: dict[tuple[str, int, int, int], str] = {}
         self._ffmpeg_status = ""
         self._ffmpeg_status_level = "warn"
+        self._hf_token_status = ""
+        self._hf_token_status_level = "warn"
+        self._hf_token_preview = ""
+        self._glm_ocr_model_status = ""
+        self._glm_ocr_model_status_level = "warn"
         self._downloading = False
 
         self._window_x = int(self.settings.value("window/x", 100))
@@ -1098,7 +1224,9 @@ class AppBackend(QObject):
         self._window_w = int(self.settings.value("window/w", 900))
         self._window_h = int(self.settings.value("window/h", 560))
 
-        self._refresh_ffmpeg_status()
+        self._apply_hf_token_environment_from_settings()
+        self._refresh_dependency_statuses()
+        QTimer.singleShot(0, self._maybe_prompt_glm_ocr_download_on_first_launch)
 
     def get_video_files(self) -> list[dict[str, object]]:
         return self._video_files
@@ -1120,6 +1248,35 @@ class AppBackend(QObject):
 
     ffmpegStatusLevel = Property(str, get_ffmpeg_status_level, notify=ffmpegStatusLevelChanged)
 
+    def get_hf_token_status(self) -> str:
+        return self._hf_token_status
+
+    hfTokenStatus = Property(str, get_hf_token_status, notify=hfTokenStatusChanged)
+
+    def get_hf_token_status_level(self) -> str:
+        return self._hf_token_status_level
+
+    hfTokenStatusLevel = Property(str, get_hf_token_status_level, notify=hfTokenStatusLevelChanged)
+
+    def get_hf_token_preview(self) -> str:
+        return self._hf_token_preview
+
+    hfTokenPreview = Property(str, get_hf_token_preview, notify=hfTokenPreviewChanged)
+
+    def get_glm_ocr_model_status(self) -> str:
+        return self._glm_ocr_model_status
+
+    glmOcrModelStatus = Property(str, get_glm_ocr_model_status, notify=glmOcrModelStatusChanged)
+
+    def get_glm_ocr_model_status_level(self) -> str:
+        return self._glm_ocr_model_status_level
+
+    glmOcrModelStatusLevel = Property(
+        str,
+        get_glm_ocr_model_status_level,
+        notify=glmOcrModelStatusLevelChanged,
+    )
+
     def get_downloading(self) -> bool:
         return self._downloading
 
@@ -1132,6 +1289,14 @@ class AppBackend(QObject):
 
     @Slot()
     def addVideos(self) -> None:
+        self._refresh_ffmpeg_status()
+        if not self.ffmpeg_path or not self.ffprobe_path:
+            self._show_critical(
+                "Missing Dependencies",
+                "Cannot add videos because ffmpeg/ffprobe is not configured.\n\n"
+                "Open Dependencies and configure ffmpeg/ffprobe first.",
+            )
+            return
         if self._add_videos_dialog is not None and self._add_videos_dialog.isVisible():
             self._add_videos_dialog.raise_()
             self._add_videos_dialog.activateWindow()
@@ -1183,6 +1348,281 @@ class AppBackend(QObject):
         for item in self._video_files:
             item["checked"] = checked
         self.videoFilesChanged.emit()
+
+    @Slot()
+    def refreshDependencyStatuses(self) -> None:
+        self._refresh_dependency_statuses()
+
+    @Slot()
+    def _maybe_prompt_glm_ocr_download_on_first_launch(self) -> None:
+        startup_prompt_shown = bool(self.settings.value("ocr/startup_prompt_shown", False))
+        if startup_prompt_shown:
+            return
+        if self._find_local_glm_ocr_model_directory() is not None:
+            return
+        saved_decision = str(self.settings.value("ocr/glm_download_decision", "") or "").strip().lower()
+        if saved_decision in {"allow", "deny"}:
+            return
+        self.settings.setValue("ocr/startup_prompt_shown", True)
+        self._show_glm_ocr_startup_prompt()
+
+    def _show_glm_ocr_startup_prompt(self) -> None:
+        if self._glm_startup_prompt_box is not None and self._glm_startup_prompt_box.isVisible():
+            self._glm_startup_prompt_box.raise_()
+            self._glm_startup_prompt_box.activateWindow()
+            return
+
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Download GLM-OCR Model")
+        box.setText(
+            "Image subtitle editing (PGS/DVD subtitles) needs GLM-OCR to convert subtitle images into editable text.\n\n"
+            "Model size: about 2.66 GB from Hugging Face.\n\n"
+            "Allow and start model download now?"
+        )
+        allow_button = box.addButton("Allow and Download Now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Skip for Now", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(allow_button)
+        box.setModal(False)
+        box.setWindowModality(Qt.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.buttonClicked.connect(self._on_glm_startup_prompt_clicked)
+        box.finished.connect(self._cleanup_glm_startup_prompt_box)
+        self._glm_startup_prompt_box = box
+        self._glm_startup_allow_button = allow_button
+        box.open()
+
+    def _on_glm_startup_prompt_clicked(self, button: object) -> None:
+        if button != self._glm_startup_allow_button:
+            return
+        self.settings.setValue("ocr/glm_download_decision", "allow")
+        self._maybe_prompt_hf_token_before_glm_download(self._start_glm_ocr_model_download)
+
+    @Slot(int)
+    def _cleanup_glm_startup_prompt_box(self, _result: int) -> None:
+        self._glm_startup_prompt_box = None
+        self._glm_startup_allow_button = None
+
+    def _start_glm_ocr_model_download(self) -> None:
+        if self._glm_download_thread is not None:
+            return
+        self._glm_download_progress_dismissed = False
+        self._glm_download_cancel_requested = False
+        self._show_glm_download_progress("Preparing GLM-OCR download...")
+        self._glm_download_thread = QThread(self)
+        self._glm_download_worker = GlmOcrModelDownloadWorker(GLM_OCR_MODEL_ID)
+        self._glm_download_worker.moveToThread(self._glm_download_thread)
+        self._glm_download_thread.started.connect(self._glm_download_worker.run)
+        self._glm_download_worker.progress.connect(self._on_glm_download_progress)
+        self._glm_download_worker.finished.connect(self._on_glm_download_finished)
+        self._glm_download_worker.failed.connect(self._on_glm_download_failed)
+        self._glm_download_worker.finished.connect(self._glm_download_thread.quit)
+        self._glm_download_worker.failed.connect(self._glm_download_thread.quit)
+        self._glm_download_thread.finished.connect(self._on_glm_download_thread_finished)
+        self._glm_download_thread.start()
+
+    def _hf_token_configured(self) -> bool:
+        if self._get_saved_hf_token():
+            return True
+        env_token = str(os.environ.get("HF_TOKEN", "") or "").strip()
+        return bool(env_token)
+
+    def _maybe_prompt_hf_token_before_glm_download(self, continue_action: Callable[[], None]) -> None:
+        if self._find_local_glm_ocr_model_directory() is not None:
+            continue_action()
+            return
+        if self._hf_token_configured():
+            continue_action()
+            return
+        if self._hf_token_prompt_box is not None and self._hf_token_prompt_box.isVisible():
+            self._pending_glm_download_action = continue_action
+            self._hf_token_prompt_box.raise_()
+            self._hf_token_prompt_box.activateWindow()
+            return
+        self._show_hf_token_prompt_before_glm_download(continue_action)
+
+    def _show_hf_token_prompt_before_glm_download(self, continue_action: Callable[[], None]) -> None:
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Set HF Token (Optional)")
+        box.setText(
+            "GLM-OCR model download is about to start.\n\n"
+            "Do you want to set HF_TOKEN first?\n"
+            "This can help with authenticated downloads and rate limits."
+        )
+        set_button = box.addButton("Set HF Token", QMessageBox.ButtonRole.ActionRole)
+        continue_button = box.addButton("Continue Without Token", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel Download", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(continue_button)
+        box.setModal(False)
+        box.setWindowModality(Qt.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._pending_glm_download_action = continue_action
+        self._hf_token_prompt_set_button = set_button
+        self._hf_token_prompt_continue_button = continue_button
+        box.buttonClicked.connect(self._on_hf_token_prompt_clicked)
+        box.finished.connect(self._cleanup_hf_token_prompt_box)
+        self._hf_token_prompt_box = box
+        box.open()
+
+    def _on_hf_token_prompt_clicked(self, button: object) -> None:
+        if self._hf_token_prompt_box is None:
+            return
+        if button == self._hf_token_prompt_continue_button:
+            action = self._pending_glm_download_action
+            self._pending_glm_download_action = None
+            if action is not None:
+                action()
+            return
+        if button == self._hf_token_prompt_set_button:
+            self._hf_token_followup_action = self._pending_glm_download_action
+            self._open_hf_token_window()
+
+    def _open_hf_token_window(self) -> None:
+        if self._hf_token_window is not None and self._hf_token_window.isVisible():
+            self._hf_token_window.raise_()
+            self._hf_token_window.activateWindow()
+            return
+        window = HfTokenInputWindow(self._on_hf_token_window_saved, self._on_hf_token_window_cancelled)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        window.destroyed.connect(self._on_hf_token_window_destroyed)
+        self._hf_token_window = window
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _on_hf_token_window_saved(self, token: str) -> None:
+        self.setHfToken(token)
+        action = self._hf_token_followup_action
+        self._hf_token_followup_action = None
+        if action is not None:
+            action()
+
+    def _on_hf_token_window_cancelled(self) -> None:
+        self._hf_token_followup_action = None
+
+    @Slot()
+    def _on_hf_token_window_destroyed(self) -> None:
+        self._hf_token_window = None
+
+    @Slot(int)
+    def _cleanup_hf_token_prompt_box(self, _result: int) -> None:
+        self._hf_token_prompt_box = None
+        self._hf_token_prompt_set_button = None
+        self._hf_token_prompt_continue_button = None
+        self._pending_glm_download_action = None
+
+    def _show_glm_download_progress(self, text: str) -> None:
+        if self._glm_download_progress_dismissed:
+            return
+        box = self._glm_download_progress_box
+        if box is not None and box.isVisible():
+            box.setText(text)
+            box.raise_()
+            box.activateWindow()
+            return
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("GLM-OCR Download")
+        box.setText(text)
+        box.setStandardButtons(QMessageBox.StandardButton.Cancel)
+        box.setModal(False)
+        box.setWindowModality(Qt.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.buttonClicked.connect(self._on_glm_download_progress_clicked)
+        box.finished.connect(self._cleanup_glm_download_progress_box)
+        self._glm_download_progress_box = box
+        box.show()
+
+    @Slot(str)
+    def _on_glm_download_progress(self, message: str) -> None:
+        self._show_glm_download_progress(message)
+
+    @Slot(str)
+    def _on_glm_download_finished(self, local_model_path: str) -> None:
+        if self._glm_download_cancel_requested:
+            return
+        self._close_glm_download_progress_box()
+        self._refresh_glm_ocr_model_status()
+        self._show_info(
+            "GLM-OCR Downloaded",
+            f"GLM-OCR model is ready.\n\nModel path:\n{local_model_path}",
+        )
+
+    @Slot(str)
+    def _on_glm_download_failed(self, error_message: str) -> None:
+        if self._glm_download_cancel_requested or error_message.strip() == "GLM-OCR download cancelled.":
+            return
+        self._close_glm_download_progress_box()
+        self._refresh_glm_ocr_model_status()
+        self._show_warning(
+            "GLM-OCR Download Failed",
+            f"Could not download GLM-OCR model.\n\n{error_message}",
+        )
+
+    def _on_glm_download_progress_clicked(self, button: object) -> None:
+        if self._glm_download_progress_box is None:
+            return
+        standard_button = self._glm_download_progress_box.standardButton(button)
+        if standard_button == QMessageBox.StandardButton.Cancel:
+            self._cancel_glm_download("Cancelling GLM-OCR download...")
+
+    def _cancel_glm_download(self, status_text: str | None = None) -> None:
+        if self._glm_download_thread is None or not self._glm_download_thread.isRunning():
+            return
+        self._glm_download_cancel_requested = True
+        if status_text and self._glm_download_progress_box is not None and self._glm_download_progress_box.isVisible():
+            self._glm_download_progress_box.setText(status_text)
+        if self._glm_download_worker is not None:
+            try:
+                self._glm_download_worker.cancel()
+            except Exception:
+                pass
+        self._glm_download_thread.requestInterruption()
+        self._glm_download_thread.quit()
+        if not self._glm_download_thread.wait(1500):
+            self._glm_download_thread.terminate()
+            self._glm_download_thread.wait(1000)
+        self._close_glm_download_progress_box()
+        self._refresh_glm_ocr_model_status()
+        self._show_info("GLM-OCR Download", "GLM-OCR download was cancelled.")
+
+    def _close_glm_download_progress_box(self) -> None:
+        if self._glm_download_progress_box is not None:
+            self._glm_download_progress_box.close()
+
+    @Slot(int)
+    def _cleanup_glm_download_progress_box(self, _result: int) -> None:
+        self._glm_download_progress_box = None
+        if self._glm_download_thread is not None and self._glm_download_thread.isRunning():
+            self._glm_download_progress_dismissed = True
+
+    def _on_glm_download_thread_finished(self) -> None:
+        if self._glm_download_worker is not None:
+            self._glm_download_worker.deleteLater()
+            self._glm_download_worker = None
+        if self._glm_download_thread is not None:
+            self._glm_download_thread.deleteLater()
+            self._glm_download_thread = None
+        self._glm_download_progress_dismissed = False
+        self._glm_download_cancel_requested = False
+
+    @Slot(str)
+    def setHfToken(self, token: str) -> None:
+        clean_token = token.strip()
+        if clean_token:
+            self.settings.setValue("hf/token", clean_token)
+            os.environ["HF_TOKEN"] = clean_token
+        else:
+            self.settings.remove("hf/token")
+            os.environ.pop("HF_TOKEN", None)
+        self._refresh_hf_token_status()
+
+    @Slot()
+    def clearHfToken(self) -> None:
+        self.settings.remove("hf/token")
+        os.environ.pop("HF_TOKEN", None)
+        self._refresh_hf_token_status()
 
     def _inspect_stream_languages(
         self, file_path: str
@@ -1416,12 +1856,14 @@ class AppBackend(QObject):
             )
             return
         if saved_decision == "allow":
-            self._start_image_subtitle_ocr(
-                file_path=file_path,
-                stream_index=stream_index,
-                stream_lang=stream_lang,
-                codec_name=codec_name,
-                editor_key=editor_key,
+            self._maybe_prompt_hf_token_before_glm_download(
+                lambda: self._start_image_subtitle_ocr(
+                    file_path=file_path,
+                    stream_index=stream_index,
+                    stream_lang=stream_lang,
+                    codec_name=codec_name,
+                    editor_key=editor_key,
+                )
             )
             return
 
@@ -1469,12 +1911,14 @@ class AppBackend(QObject):
         standard_button = self._ocr_permission_box.standardButton(button)
         if standard_button == QMessageBox.StandardButton.Yes:
             self.settings.setValue("ocr/glm_download_decision", "allow")
-            self._start_image_subtitle_ocr(
-                file_path=file_path,
-                stream_index=stream_index,
-                stream_lang=stream_lang,
-                codec_name=codec_name,
-                editor_key=editor_key,
+            self._maybe_prompt_hf_token_before_glm_download(
+                lambda: self._start_image_subtitle_ocr(
+                    file_path=file_path,
+                    stream_index=stream_index,
+                    stream_lang=stream_lang,
+                    codec_name=codec_name,
+                    editor_key=editor_key,
+                )
             )
             return
         self.settings.setValue("ocr/glm_download_decision", "deny")
@@ -1551,6 +1995,7 @@ class AppBackend(QObject):
     @Slot(str)
     def _on_ocr_finished(self, srt_text: str) -> None:
         self._close_ocr_progress_box()
+        self._refresh_glm_ocr_model_status()
         file_path = self._ocr_target_file_path
         stream_index = self._ocr_target_stream_index
         stream_lang = self._ocr_target_stream_lang
@@ -1582,6 +2027,7 @@ class AppBackend(QObject):
     @Slot(str)
     def _on_ocr_failed(self, error_message: str) -> None:
         self._close_ocr_progress_box()
+        self._refresh_glm_ocr_model_status()
         if error_message.strip() == "OCR cancelled.":
             self._show_info("Subtitle OCR", "Image subtitle OCR was cancelled.")
             return
@@ -1899,6 +2345,17 @@ class AppBackend(QObject):
         )
 
     @Slot()
+    def searchFfmpegInPath(self) -> None:
+        previous_dir = self.settings.value("ffmpeg/bin_dir")
+        self.settings.remove("ffmpeg/bin_dir")
+        self._refresh_ffmpeg_status()
+        if self.ffmpeg_path and self.ffprobe_path:
+            return
+        if isinstance(previous_dir, str) and previous_dir:
+            self.settings.setValue("ffmpeg/bin_dir", previous_dir)
+            self._refresh_ffmpeg_status()
+
+    @Slot()
     def downloadFfmpeg(self) -> None:
         if self.download_thread is not None:
             return
@@ -1917,6 +2374,98 @@ class AppBackend(QObject):
             f"{archive_name}"
         )
         tools_dir = Path(__file__).resolve().parent / "tools" / "ffmpeg"
+        if self._tools_ffmpeg_binaries_exist(tools_dir):
+            self._confirm_ffmpeg_override(download_url, archive_ext, tools_dir)
+            return
+        self._start_ffmpeg_download(download_url, archive_ext, tools_dir)
+
+    def _tools_ffmpeg_binaries_exist(self, tools_dir: Path) -> bool:
+        bin_dir = tools_dir / "bin"
+        ffmpeg_path = self._binary_from_directory(str(bin_dir), "ffmpeg")
+        ffprobe_path = self._binary_from_directory(str(bin_dir), "ffprobe")
+        return bool(ffmpeg_path and ffprobe_path)
+
+    def _confirm_ffmpeg_override(self, download_url: str, archive_ext: str, tools_dir: Path) -> None:
+        if self._ffmpeg_override_box is not None and self._ffmpeg_override_box.isVisible():
+            self._ffmpeg_override_box.raise_()
+            self._ffmpeg_override_box.activateWindow()
+            return
+
+        bin_dir = tools_dir / "bin"
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Overwrite Existing Binaries")
+        box.setText(
+            "Found existing ffmpeg/ffprobe binaries.\n\n"
+            f"Directory:\n{bin_dir}\n\n"
+            "Choose what to do with the existing binaries."
+        )
+        download_button = box.addButton("Download and Override", QMessageBox.ButtonRole.AcceptRole)
+        use_existing_button = box.addButton("Use Existing", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(use_existing_button)
+        box.setModal(False)
+        box.setWindowModality(Qt.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.buttonClicked.connect(
+            lambda button: self._on_ffmpeg_override_button_clicked(
+                button,
+                download_url,
+                archive_ext,
+                str(tools_dir),
+            )
+        )
+        box.finished.connect(
+            lambda _result: self._on_ffmpeg_override_finished(
+                download_url,
+                archive_ext,
+                str(tools_dir),
+            )
+        )
+        box.finished.connect(self._cleanup_ffmpeg_override_box)
+        self._ffmpeg_override_box = box
+        self._ffmpeg_override_download_button = download_button
+        self._ffmpeg_override_use_existing_button = use_existing_button
+        self._ffmpeg_override_decided = False
+        box.open()
+
+    def _use_existing_tools_ffmpeg(self, tools_dir: str) -> None:
+        bin_dir = str(Path(tools_dir) / "bin")
+        self.settings.setValue("ffmpeg/bin_dir", bin_dir)
+        self._refresh_ffmpeg_status()
+
+    def _on_ffmpeg_override_button_clicked(
+        self,
+        button: object,
+        download_url: str,
+        archive_ext: str,
+        tools_dir: str,
+    ) -> None:
+        self._ffmpeg_override_decided = True
+        if button == self._ffmpeg_override_download_button:
+            self._start_ffmpeg_download(download_url, archive_ext, Path(tools_dir))
+            return
+        self._use_existing_tools_ffmpeg(tools_dir)
+
+    def _on_ffmpeg_override_finished(
+        self,
+        download_url: str,
+        archive_ext: str,
+        tools_dir: str,
+    ) -> None:
+        if self._ffmpeg_override_decided:
+            return
+        self._use_existing_tools_ffmpeg(tools_dir)
+
+    @Slot(int)
+    def _cleanup_ffmpeg_override_box(self, _result: int) -> None:
+        self._ffmpeg_override_box = None
+        self._ffmpeg_override_download_button = None
+        self._ffmpeg_override_use_existing_button = None
+        self._ffmpeg_override_decided = False
+
+    def _start_ffmpeg_download(self, download_url: str, archive_ext: str, tools_dir: Path) -> None:
+        if self.download_thread is not None:
+            return
 
         self._set_downloading(True)
         self._set_ffmpeg_status("progress", "Starting FFmpeg download...")
@@ -1981,6 +2530,12 @@ class AppBackend(QObject):
             self._show_info(
                 "Download in Progress",
                 "Please wait for FFmpeg download to finish before closing the app.",
+            )
+            return False
+        if self._glm_download_thread is not None and self._glm_download_thread.isRunning():
+            self._show_info(
+                "Download in Progress",
+                "Please wait for GLM-OCR download to finish before closing the app.",
             )
             return False
         if self._ocr_thread is not None and self._ocr_thread.isRunning():
@@ -2054,6 +2609,27 @@ class AppBackend(QObject):
     def _show_critical(self, title: str, text: str) -> None:
         self._show_message(QMessageBox.Icon.Critical, title, text)
 
+    def _set_hf_token_status(self, level: str, text: str) -> None:
+        if self._hf_token_status != text:
+            self._hf_token_status = text
+            self.hfTokenStatusChanged.emit()
+        if self._hf_token_status_level != level:
+            self._hf_token_status_level = level
+            self.hfTokenStatusLevelChanged.emit()
+
+    def _set_hf_token_preview(self, preview: str) -> None:
+        if self._hf_token_preview != preview:
+            self._hf_token_preview = preview
+            self.hfTokenPreviewChanged.emit()
+
+    def _set_glm_ocr_model_status(self, level: str, text: str) -> None:
+        if self._glm_ocr_model_status != text:
+            self._glm_ocr_model_status = text
+            self.glmOcrModelStatusChanged.emit()
+        if self._glm_ocr_model_status_level != level:
+            self._glm_ocr_model_status_level = level
+            self.glmOcrModelStatusLevelChanged.emit()
+
     def _set_ffmpeg_status(self, level: str, text: str) -> None:
         if self._ffmpeg_status != text:
             self._ffmpeg_status = text
@@ -2062,12 +2638,77 @@ class AppBackend(QObject):
             self._ffmpeg_status_level = level
             self.ffmpegStatusLevelChanged.emit()
 
+    def _get_saved_hf_token(self) -> str:
+        return str(self.settings.value("hf/token", "") or "").strip()
+
+    def _apply_hf_token_environment_from_settings(self) -> None:
+        saved_token = self._get_saved_hf_token()
+        if saved_token:
+            os.environ["HF_TOKEN"] = saved_token
+
     def _binary_from_directory(self, directory: str, binary_name: str) -> str | None:
         file_name = f"{binary_name}.exe" if os.name == "nt" else binary_name
         path = os.path.join(directory, file_name)
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
         return None
+
+    def _refresh_dependency_statuses(self) -> None:
+        self._refresh_ffmpeg_status()
+        self._refresh_hf_token_status()
+        self._refresh_glm_ocr_model_status()
+
+    def _refresh_hf_token_status(self) -> None:
+        saved_token = self._get_saved_hf_token()
+        if saved_token:
+            self._set_hf_token_status("ok", "Configured (saved).")
+            self._set_hf_token_preview(self._mask_token(saved_token))
+            return
+        env_token = str(os.environ.get("HF_TOKEN", "") or "").strip()
+        if env_token:
+            self._set_hf_token_status("ok", "Configured (environment).")
+            self._set_hf_token_preview(self._mask_token(env_token))
+            return
+        self._set_hf_token_status("warn", "Not configured (optional).")
+        self._set_hf_token_preview("")
+
+    def _mask_token(self, token: str) -> str:
+        clean_token = token.strip()
+        if not clean_token:
+            return ""
+        if len(clean_token) <= 8:
+            return "********"
+        return f"{clean_token[:4]}********{clean_token[-4:]}"
+
+    def _refresh_glm_ocr_model_status(self) -> None:
+        model_directory = self._find_local_glm_ocr_model_directory()
+        if model_directory is not None:
+            self._set_glm_ocr_model_status("ok", f"Installed: {model_directory}")
+            return
+        self._set_glm_ocr_model_status("warn", "Missing (download on first OCR run).")
+
+    def _find_local_glm_ocr_model_directory(self) -> str | None:
+        hub_cache_env = str(os.environ.get("HUGGINGFACE_HUB_CACHE", "") or "").strip()
+        if hub_cache_env:
+            hub_cache = Path(hub_cache_env)
+        else:
+            hf_home_env = str(os.environ.get("HF_HOME", "") or "").strip()
+            hf_home = Path(hf_home_env) if hf_home_env else Path.home() / ".cache" / "huggingface"
+            hub_cache = hf_home / "hub"
+        model_root = hub_cache / "models--zai-org--GLM-OCR"
+        snapshot_dir = model_root / "snapshots"
+        if not snapshot_dir.is_dir():
+            return None
+        try:
+            snapshot_candidates = sorted(
+                (path for path in snapshot_dir.iterdir() if path.is_dir()),
+                key=lambda path: path.name,
+            )
+        except OSError:
+            return None
+        if not snapshot_candidates:
+            return None
+        return str(model_root)
 
     def _refresh_ffmpeg_status(self) -> None:
         self.ffmpeg_path = None

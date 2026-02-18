@@ -12,3 +12,9 @@ dependencies = [
     "torchvision>=0.25.0",
     "transformers @ git+https://github.com/huggingface/transformers.git",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-qt>=4.5.0",
+]

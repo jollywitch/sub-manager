@@ -122,8 +122,9 @@ ApplicationWindow {
                 }
             }
             Button {
-                text: "FFmpeg Settings"
+                text: "Dependencies"
                 onClicked: {
+                    backend.refreshDependencyStatuses()
                     if (!ffmpegSettingsWindow.visible) {
                         ffmpegSettingsWindow.show()
                     } else if (ffmpegSettingsWindow.visibility === Window.Minimized) {
