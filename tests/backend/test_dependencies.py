@@ -342,138 +342,86 @@ def test_add_videos_shows_error_when_ffmpeg_not_configured(
     assert backend._add_videos_dialog is None
 
 
-def test_first_launch_missing_glm_model_shows_startup_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_settings: FakeSettings,
-    tmp_path: Path,
-) -> None:
-    backend = _new_backend(monkeypatch, tmp_path)
-    prompts: list[str] = []
-    monkeypatch.setattr(backend, "_show_glm_ocr_startup_prompt", lambda: prompts.append("shown"))
-    monkeypatch.setattr(backend, "_find_local_glm_ocr_model_directory", lambda: None)
-    fake_settings.remove("ocr/startup_prompt_shown")
-    fake_settings.remove("ocr/glm_download_decision")
-
-    backend._maybe_prompt_glm_ocr_download_on_first_launch()
-
-    assert prompts == ["shown"]
-    assert bool(fake_settings.value("ocr/startup_prompt_shown", False)) is True
-
-
-def test_first_launch_glm_prompt_skips_when_decision_exists(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_settings: FakeSettings,
-    tmp_path: Path,
-) -> None:
-    backend = _new_backend(monkeypatch, tmp_path)
-    prompts: list[str] = []
-    monkeypatch.setattr(backend, "_show_glm_ocr_startup_prompt", lambda: prompts.append("shown"))
-    monkeypatch.setattr(backend, "_find_local_glm_ocr_model_directory", lambda: None)
-    fake_settings.remove("ocr/startup_prompt_shown")
-    fake_settings.setValue("ocr/glm_download_decision", "allow")
-
-    backend._maybe_prompt_glm_ocr_download_on_first_launch()
-
-    assert prompts == []
-
-
-def test_glm_startup_allow_routes_through_hf_prompt_gate(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_settings: FakeSettings,
-    tmp_path: Path,
-) -> None:
-    backend = _new_backend(monkeypatch, tmp_path)
-    routed: list[str] = []
-    monkeypatch.setattr(
-        backend,
-        "_maybe_prompt_hf_token_before_glm_download",
-        lambda action: (routed.append("gated"), action()),
-    )
-    started: list[str] = []
-    monkeypatch.setattr(backend, "_start_glm_ocr_model_download", lambda: started.append("started"))
-    allow_button = object()
-    backend._glm_startup_allow_button = allow_button  # type: ignore[assignment]
-
-    backend._on_glm_startup_prompt_clicked(allow_button)
-
-    assert fake_settings.value("ocr/glm_download_decision") == "allow"
-    assert routed == ["gated"]
-    assert started == ["started"]
-
-
-def test_glm_download_hf_prompt_shows_when_token_missing(
+def test_image_ocr_missing_glm_model_opens_setup_window(
     monkeypatch: pytest.MonkeyPatch,
     fake_settings: FakeSettings,
     tmp_path: Path,
 ) -> None:
     backend = _new_backend(monkeypatch, tmp_path)
     monkeypatch.setattr(backend, "_find_local_glm_ocr_model_directory", lambda: None)
-    monkeypatch.setattr(backend, "_hf_token_configured", lambda: False)
     events: list[str] = []
     monkeypatch.setattr(
         backend,
-        "_show_hf_token_prompt_before_glm_download",
-        lambda _action: events.append("prompted"),
+        "_show_glm_download_setup",
+        lambda continue_action: events.append("setup_opened"),
+    )
+    monkeypatch.setattr(backend, "_start_image_subtitle_ocr", lambda **_kwargs: events.append("ocr_started"))
+
+    backend._start_image_subtitle_ocr_with_download_if_needed(
+        file_path="/tmp/video.mkv",
+        stream_index=2,
+        stream_lang="eng",
+        codec_name="hdmv_pgs_subtitle",
+        editor_key="video::2",
     )
 
-    backend._maybe_prompt_hf_token_before_glm_download(lambda: events.append("continued"))
-
-    assert events == ["prompted"]
+    assert events == ["setup_opened"]
 
 
-def test_glm_download_hf_prompt_skipped_when_token_configured(
+def test_glm_setup_download_saves_token_and_starts_download(
     monkeypatch: pytest.MonkeyPatch,
     fake_settings: FakeSettings,
     tmp_path: Path,
 ) -> None:
     backend = _new_backend(monkeypatch, tmp_path)
-    monkeypatch.setattr(backend, "_find_local_glm_ocr_model_directory", lambda: None)
-    monkeypatch.setattr(backend, "_hf_token_configured", lambda: True)
-    events: list[str] = []
+    backend._glm_download_followup_action = lambda: None
+    started: list[object] = []
+    monkeypatch.setattr(backend, "_show_glm_download_progress", lambda _text: None)
     monkeypatch.setattr(
         backend,
-        "_show_hf_token_prompt_before_glm_download",
-        lambda _action: events.append("prompted"),
+        "_start_glm_ocr_model_download",
+        lambda after_download_action=None: started.append(after_download_action),
     )
 
-    backend._maybe_prompt_hf_token_before_glm_download(lambda: events.append("continued"))
-
-    assert events == ["continued"]
-
-
-def test_hf_prompt_set_token_does_not_continue_glm_download(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_settings: FakeSettings,
-    tmp_path: Path,
-) -> None:
-    backend = _new_backend(monkeypatch, tmp_path)
-    events: list[str] = []
-    backend._hf_token_prompt_box = object()  # type: ignore[assignment]
-    set_button = object()
-    backend._hf_token_prompt_set_button = set_button  # type: ignore[assignment]
-    backend._hf_token_prompt_continue_button = object()  # type: ignore[assignment]
-    backend._pending_glm_download_action = lambda: events.append("continued")
-    monkeypatch.setattr(backend, "_open_hf_token_window", lambda: events.append("open_hf_popup"))
-
-    backend._on_hf_token_prompt_clicked(set_button)
-
-    assert "continued" not in events
-    assert events == ["open_hf_popup"]
-
-
-def test_hf_token_window_save_continues_pending_glm_download(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_settings: FakeSettings,
-    tmp_path: Path,
-) -> None:
-    backend = _new_backend(monkeypatch, tmp_path)
-    events: list[str] = []
-    backend._hf_token_followup_action = lambda: events.append("continued")
-
-    backend._on_hf_token_window_saved("hf_test_token")
+    backend._on_glm_setup_download_clicked("hf_test_token")
 
     assert fake_settings.value("hf/token") == "hf_test_token"
-    assert events == ["continued"]
+    assert len(started) == 1
+
+
+def test_glm_setup_cancel_clears_followup_action(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_settings: FakeSettings,
+    tmp_path: Path,
+) -> None:
+    backend = _new_backend(monkeypatch, tmp_path)
+    backend._glm_download_followup_action = lambda: None
+
+    backend._on_glm_setup_cancelled()
+
+    assert backend._glm_download_followup_action is None
+
+
+def test_start_glm_download_when_already_running_shows_progress_again(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_settings: FakeSettings,
+    tmp_path: Path,
+) -> None:
+    backend = _new_backend(monkeypatch, tmp_path)
+
+    class FakeThread:
+        def isRunning(self) -> bool:
+            return True
+
+    backend._glm_download_thread = FakeThread()  # type: ignore[assignment]
+    events: list[str] = []
+    backend._glm_download_progress_dismissed = True
+    monkeypatch.setattr(backend, "_show_glm_download_progress", lambda text: events.append(text))
+
+    backend._start_glm_ocr_model_download()
+
+    assert backend._glm_download_progress_dismissed is False
+    assert events == ["GLM-OCR download is already running..."]
 
 
 def test_cancel_glm_download_stops_thread_and_notifies_user(
@@ -526,3 +474,61 @@ def test_cancel_glm_download_stops_thread_and_notifies_user(
     assert fake_thread.interrupted is True
     assert fake_thread.quit_called is True
     assert infos == [("GLM-OCR Download", "GLM-OCR download was cancelled.")]
+
+
+def test_image_ocr_setup_followup_starts_ocr_after_glm_download(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_settings: FakeSettings,
+    tmp_path: Path,
+) -> None:
+    backend = _new_backend(monkeypatch, tmp_path)
+    events: list[str] = []
+    followup = lambda: events.append("ocr_started")
+    backend._glm_download_followup_action = followup
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(backend, "_show_glm_download_progress", lambda _text: None)
+    monkeypatch.setattr(
+        backend,
+        "_start_glm_ocr_model_download",
+        lambda after_download_action=None: captured.setdefault("action", after_download_action),
+    )
+
+    backend._on_glm_setup_download_clicked("")
+
+    assert events == []
+    assert captured.get("action") is followup
+    # Simulate download complete and ensure followup action executes.
+    monkeypatch.setattr(backend, "_close_glm_download_progress_box", lambda: None)
+    monkeypatch.setattr(backend, "_refresh_glm_ocr_model_status", lambda: None)
+    monkeypatch.setattr(backend, "_show_info", lambda *_args: None)
+    backend._glm_download_cancel_requested = False
+    backend._glm_download_followup_action = followup
+    backend._on_glm_download_finished("/tmp/model")
+
+    assert events == ["ocr_started"]
+
+
+def test_glm_download_worker_uses_xet_high_performance_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HF_XET_HIGH_PERFORMANCE", raising=False)
+    worker = main.GlmOcrModelDownloadWorker("zai-org/GLM-OCR", hf_token="hf_test")
+
+    env, xet_enabled = worker._build_download_env()
+
+    assert xet_enabled is True
+    assert env["HF_XET_HIGH_PERFORMANCE"] == "1"
+    assert env["HF_TOKEN"] == "hf_test"
+    assert "HF_HUB_ENABLE_HF_TRANSFER" not in env
+
+
+def test_glm_download_worker_respects_explicit_xet_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HF_XET_HIGH_PERFORMANCE", "0")
+    worker = main.GlmOcrModelDownloadWorker("zai-org/GLM-OCR", hf_token=None)
+
+    env, xet_enabled = worker._build_download_env()
+
+    assert xet_enabled is False
+    assert env["HF_XET_HIGH_PERFORMANCE"] == "0"
