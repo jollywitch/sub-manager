@@ -5,6 +5,7 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: root
     required property var backend
+    readonly property int baseWindowFlags: Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
     readonly property int selectColumnWidth: 28
     readonly property int separatorWidth: 1
     readonly property int cellPaddingX: 8
@@ -15,6 +16,7 @@ ApplicationWindow {
     property int subtitleColumnWidth: 250
     readonly property int tableContentWidth: selectColumnWidth + (separatorWidth * 3) + fileColumnWidth + audioColumnWidth + subtitleColumnWidth + 16
     visible: true
+    flags: baseWindowFlags | (backend.isSubWindowActive ? Qt.WindowDoesNotAcceptFocus : 0)
     title: "Sub Manager"
     x: backend.windowX
     y: backend.windowY
@@ -59,10 +61,18 @@ ApplicationWindow {
             return
         }
         backend.saveWindowGeometry(x, y, width, height)
+        Qt.quit()
+    }
+
+    onActiveChanged: {
+        if (active && backend.isSubWindowActive) {
+            backend.focusActiveSubWindow()
+        }
     }
 
     Item {
         anchors.fill: parent
+        enabled: !backend.isSubWindowActive
 
         Rectangle {
             id: mainCardShadow
@@ -604,8 +614,180 @@ ApplicationWindow {
 
     }
 
+    MouseArea {
+        anchors.fill: parent
+        visible: backend.isSubWindowActive
+        enabled: backend.isSubWindowActive
+        z: 99999
+        acceptedButtons: Qt.AllButtons
+        onPressed: function(_mouse) {
+            backend.focusActiveSubWindow()
+        }
+    }
+
     FfmpegSettingsWindow {
         id: ffmpegSettingsWindow
         backend: root.backend
+        modality: Qt.ApplicationModal
+        transientParent: root
+        onVisibleChanged: {
+            if (visible) {
+                root.backend.notifySubWindowOpened("ffmpeg_settings")
+            } else {
+                root.backend.notifySubWindowClosed("ffmpeg_settings")
+            }
+        }
+    }
+
+    Window {
+        id: subtitleInfoWindow
+        visible: false
+        modality: Qt.ApplicationModal
+        transientParent: root
+        flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowSystemMenuHint
+        title: "Subtitle Info"
+        width: 430
+        height: 230
+        onVisibleChanged: {
+            if (visible) {
+                root.backend.notifySubWindowOpened("subtitle_info")
+            } else {
+                root.backend.notifySubWindowClosed("subtitle_info")
+            }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#ffffff"
+            border.width: 1
+            border.color: "#d9d9d9"
+
+            ScrollView {
+                anchors.fill: parent
+                anchors.margins: 12
+                clip: true
+
+                TextArea {
+                    id: subtitleInfoText
+                    readOnly: true
+                    wrapMode: TextEdit.Wrap
+                    selectByMouse: true
+                    background: null
+                }
+            }
+        }
+    }
+
+    Window {
+        id: ocrProgressWindow
+        visible: false
+        modality: Qt.ApplicationModal
+        transientParent: root
+        flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowSystemMenuHint
+        title: "Subtitle OCR"
+        width: 440
+        height: 170
+        onVisibleChanged: {
+            if (visible) {
+                root.backend.notifySubWindowOpened("ocr_progress")
+            } else {
+                root.backend.notifySubWindowClosed("ocr_progress")
+            }
+        }
+        onClosing: function(close) {
+            root.backend.dismissOcrProgressWindow()
+            close.accepted = true
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#ffffff"
+            border.width: 1
+            border.color: "#d9d9d9"
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 10
+
+                Label {
+                    id: ocrProgressText
+                    Layout.fillWidth: true
+                    text: ""
+                    wrapMode: Text.Wrap
+                }
+
+                Item { Layout.fillHeight: true }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        text: "Cancel OCR"
+                        onClicked: root.backend.cancelOcrOperation()
+                    }
+                    Button {
+                        text: "Close"
+                        onClicked: root.backend.dismissOcrProgressWindow()
+                    }
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: root.backend
+        function onSubtitleInfoRequested(text) {
+            subtitleInfoText.text = text
+            if (!subtitleInfoWindow.visible) {
+                subtitleInfoWindow.show()
+            } else if (subtitleInfoWindow.visibility === Window.Minimized) {
+                subtitleInfoWindow.showNormal()
+            }
+            subtitleInfoWindow.requestActivate()
+        }
+
+        function onOcrProgressRequested(text) {
+            ocrProgressText.text = text
+            if (!ocrProgressWindow.visible) {
+                ocrProgressWindow.show()
+            } else if (ocrProgressWindow.visibility === Window.Minimized) {
+                ocrProgressWindow.showNormal()
+            }
+            ocrProgressWindow.requestActivate()
+        }
+
+        function onOcrProgressHidden() {
+            ocrProgressWindow.hide()
+        }
+
+        function onFocusSubWindowRequested(windowId) {
+            if (windowId === "ffmpeg_settings") {
+                if (ffmpegSettingsWindow.visibility === Window.Minimized) {
+                    ffmpegSettingsWindow.showNormal()
+                } else {
+                    ffmpegSettingsWindow.show()
+                }
+                ffmpegSettingsWindow.requestActivate()
+                return
+            }
+            if (windowId === "subtitle_info") {
+                if (subtitleInfoWindow.visibility === Window.Minimized) {
+                    subtitleInfoWindow.showNormal()
+                } else {
+                    subtitleInfoWindow.show()
+                }
+                subtitleInfoWindow.requestActivate()
+                return
+            }
+            if (windowId === "ocr_progress") {
+                if (ocrProgressWindow.visibility === Window.Minimized) {
+                    ocrProgressWindow.showNormal()
+                } else {
+                    ocrProgressWindow.show()
+                }
+                ocrProgressWindow.requestActivate()
+            }
+        }
     }
 }

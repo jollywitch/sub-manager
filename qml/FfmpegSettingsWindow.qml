@@ -9,7 +9,7 @@ Window {
     readonly property int dependencyRowHeight: 32
     readonly property color detailTextColor: "#777777"
     visible: false
-    modality: Qt.NonModal
+    modality: Qt.ApplicationModal
     transientParent: null
     width: dependenciesLayout.implicitWidth + 24
     height: dependenciesLayout.implicitHeight + 24

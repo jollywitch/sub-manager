@@ -1,0 +1,64 @@
+name: Release Windows Executable
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [folder, onefile]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        shell: pwsh
+        run: python -m pip install --upgrade pip uv
+
+      - name: Sync dependencies
+        shell: pwsh
+        run: uv sync --group dev
+
+      - name: Build (folder)
+        if: matrix.mode == 'folder'
+        shell: pwsh
+        run: uv run pyinstaller sub-manager.spec --noconfirm --clean
+
+      - name: Build (onefile)
+        if: matrix.mode == 'onefile'
+        shell: pwsh
+        run: uv run pyinstaller main.py --name sub-manager --onefile --windowed --noconfirm --clean --add-data "qml;qml"
+
+      - name: Archive folder build
+        if: matrix.mode == 'folder'
+        shell: pwsh
+        run: Compress-Archive -Path dist/sub-manager/* -DestinationPath dist/sub-manager-windows-folder.zip -Force
+
+      - name: Upload release asset (folder zip)
+        if: matrix.mode == 'folder'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/sub-manager-windows-folder.zip
+          generate_release_notes: true
+
+      - name: Upload release asset (onefile exe)
+        if: matrix.mode == 'onefile'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/sub-manager.exe
+          generate_release_notes: true
