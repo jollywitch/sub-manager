@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parent
+# In some CI executions, PyInstaller does not populate `__file__` in the
+# spec namespace. Fall back to the current working directory.
+_spec_file = globals().get("__file__")
+project_root = Path(_spec_file).resolve().parent if _spec_file else Path.cwd().resolve()
 qml_dir = project_root / "qml"
 
 datas = []
