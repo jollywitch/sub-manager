@@ -40,3 +40,39 @@ Name: "{autodesktop}\\Sub Manager"; Filename: "{app}\\sub-manager.exe"; Tasks: d
 
 [Run]
 Filename: "{app}\\sub-manager.exe"; Description: "Launch Sub Manager"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  RemoveAllData: Boolean;
+  AppDataDir: string;
+  GlmCacheDir: string;
+begin
+  if CurUninstallStep <> usUninstall then
+    exit;
+
+  RemoveAllData :=
+    MsgBox(
+      'Do you also want to remove all Sub Manager user data?' + #13#10 + #13#10 +
+      'This will delete:' + #13#10 +
+      '- App data in %LOCALAPPDATA%\sub-manager (logs, downloaded tools, runtime packages)' + #13#10 +
+      '- Downloaded GLM model cache in %USERPROFILE%\.cache\huggingface\hub\models--zai-org--GLM-OCR' + #13#10 +
+      '- Saved app settings (including HF token)',
+      mbConfirmation,
+      MB_YESNO
+    ) = IDYES;
+
+  if not RemoveAllData then
+    exit;
+
+  AppDataDir := ExpandConstant('{localappdata}\sub-manager');
+  GlmCacheDir := ExpandConstant('{userprofile}\.cache\huggingface\hub\models--zai-org--GLM-OCR');
+
+  if DirExists(AppDataDir) then
+    DelTree(AppDataDir, True, True, True);
+  if DirExists(GlmCacheDir) then
+    DelTree(GlmCacheDir, True, True, True);
+
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\sub-manager\sub-manager');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\sub-manager');
+end;
