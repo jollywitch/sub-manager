@@ -198,7 +198,12 @@ class GlmOcrModelDownloadWorker(QObject):
                 stat_result = path.lstat()
             except OSError:
                 continue
-            total += int(getattr(stat_result, "st_blocks", 0) or 0) * 512
+            # `st_blocks` is typically 0 on Windows, so fall back to file size.
+            block_bytes = int(getattr(stat_result, "st_blocks", 0) or 0) * 512
+            if block_bytes > 0:
+                total += block_bytes
+            else:
+                total += int(getattr(stat_result, "st_size", 0) or 0)
         return max(0, total)
 
     def _snapshot_download_script(self) -> str:
@@ -319,6 +324,7 @@ except Exception as exc:
             unknown_progress_reported = False
             total_bytes = 0
             last_status = ""
+            last_heartbeat_at = 0.0
             while self._process.poll() is None:
                 if self._cancel_requested:
                     self._terminate_process()
@@ -367,6 +373,13 @@ except Exception as exc:
                     if status != last_status:
                         self.progress.emit(status)
                         last_status = status
+                now = time.monotonic()
+                if now - last_heartbeat_at >= 5.0:
+                    self.diagnostic.emit(
+                        "Download still running: "
+                        f"{self._format_bytes(current_allocated)} downloaded so far."
+                    )
+                    last_heartbeat_at = now
                 while True:
                     try:
                         stderr_line = stderr_queue.get_nowait()
