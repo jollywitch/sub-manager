@@ -470,6 +470,27 @@ class GlmOcrModelDownloadWorker(QObject):
                 hub_cache = str(Path.home() / ".cache" / "huggingface" / "hub")
         return Path(hub_cache) / f"models--{self.model_id.replace('/', '--')}"
 
+    def _infer_snapshot_path(self, storage_dir: Path) -> str:
+        refs_main = storage_dir / "refs" / "main"
+        try:
+            snapshot_id = refs_main.read_text(encoding="utf-8").strip()
+        except OSError:
+            snapshot_id = ""
+        if snapshot_id:
+            snapshot = storage_dir / "snapshots" / snapshot_id
+            if snapshot.is_dir():
+                return str(snapshot)
+        snapshots_root = storage_dir / "snapshots"
+        if not snapshots_root.is_dir():
+            return ""
+        try:
+            candidates = sorted((p for p in snapshots_root.iterdir() if p.is_dir()), key=lambda p: p.name)
+        except OSError:
+            return ""
+        if not candidates:
+            return ""
+        return str(candidates[-1])
+
     def _directory_allocated_bytes(self, root: Path) -> int:
         if not root.exists():
             return 0
@@ -539,10 +560,38 @@ except Exception as exc:
     def _single_quote_for_powershell(self, value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
+    def _build_elevated_snapshot_script(
+        self,
+        env: dict[str, str],
+        event_file: Path,
+        stderr_file: Path,
+    ) -> str:
+        # Elevated processes do not reliably inherit caller-provided env vars,
+        # so seed everything explicitly in the child script.
+        lines = [
+            "import os",
+            f"os.environ['GLM_OCR_MODEL_ID'] = {json.dumps(self.model_id)}",
+            f"os.environ['GLM_OCR_EVENT_FILE'] = {json.dumps(str(event_file))}",
+            f"os.environ['GLM_OCR_STDERR_FILE'] = {json.dumps(str(stderr_file))}",
+            f"os.environ['HF_HUB_DISABLE_XET'] = {json.dumps(str(env.get('HF_HUB_DISABLE_XET', '1')))}",
+            f"os.environ['HF_XET_HIGH_PERFORMANCE'] = {json.dumps(str(env.get('HF_XET_HIGH_PERFORMANCE', '0')))}",
+        ]
+        if self.hf_token:
+            lines.append(f"os.environ['HF_TOKEN'] = {json.dumps(self.hf_token)}")
+        hub_cache = str(env.get("HUGGINGFACE_HUB_CACHE", "") or "").strip()
+        if hub_cache:
+            lines.append(f"os.environ['HUGGINGFACE_HUB_CACHE'] = {json.dumps(hub_cache)}")
+        hf_home = str(env.get("HF_HOME", "") or "").strip()
+        if hf_home:
+            lines.append(f"os.environ['HF_HOME'] = {json.dumps(hf_home)}")
+        lines.append(self._snapshot_download_script())
+        return "\n".join(lines)
+
     def _start_elevated_snapshot_subprocess(
         self, env: dict[str, str]
     ) -> tuple[queue.Queue[dict[str, object]], queue.Queue[str], threading.Thread, threading.Thread]:
-        python_command = self._resolve_python_command()
+        python_command = self._ensure_embedded_python()
+        self._python_command = python_command
         python_exe = str(Path(python_command[0]).resolve())
         temp_dir = APP_DATA_DIR / "runtime-tmp"
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -550,23 +599,30 @@ except Exception as exc:
         self._snapshot_script_path = temp_dir / f"glm_snapshot_{suffix}.py"
         self._snapshot_event_path = temp_dir / f"glm_snapshot_{suffix}.jsonl"
         self._snapshot_stderr_path = temp_dir / f"glm_snapshot_{suffix}.stderr.log"
-        self._snapshot_script_path.write_text(self._snapshot_download_script(), encoding="utf-8")
+        self._snapshot_script_path.write_text(
+            self._build_elevated_snapshot_script(
+                env,
+                self._snapshot_event_path,
+                self._snapshot_stderr_path,
+            ),
+            encoding="utf-8",
+        )
         self._snapshot_event_path.write_text("", encoding="utf-8")
         self._snapshot_stderr_path.write_text("", encoding="utf-8")
-        env["GLM_OCR_EVENT_FILE"] = str(self._snapshot_event_path)
-        env["GLM_OCR_STDERR_FILE"] = str(self._snapshot_stderr_path)
 
         ps_script = (
             "$ErrorActionPreference='Stop';"
-            f"Start-Process -FilePath {self._single_quote_for_powershell(python_exe)} "
+            f"$p = Start-Process -FilePath {self._single_quote_for_powershell(python_exe)} "
             f"-ArgumentList @({self._single_quote_for_powershell(str(self._snapshot_script_path))}) "
-            "-Verb RunAs -WindowStyle Hidden -Wait"
+            "-Verb RunAs -WindowStyle Hidden -PassThru;"
+            "$p.WaitForExit();"
+            "exit $p.ExitCode"
         )
         self._process = subprocess.Popen(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=env,
+            env=os.environ.copy(),
             text=True,
             bufsize=1,
             **windows_hidden_subprocess_kwargs(),
@@ -764,6 +820,7 @@ except Exception as exc:
             total_bytes = 0
             last_status = ""
             last_heartbeat_at = 0.0
+            completed_at: float | None = None
             while self._process.poll() is None:
                 if self._cancel_requested:
                     self._terminate_process()
@@ -777,6 +834,10 @@ except Exception as exc:
                     event_type = str(payload.get("type", "")).strip().lower()
                     if event_type == "done":
                         local_model_path = str(payload.get("path", "") or "").strip()
+                        if local_model_path:
+                            self.diagnostic.emit("Received completion event from snapshot_download.")
+                            self._terminate_process()
+                            break
                     elif event_type == "error":
                         last_error = str(payload.get("message", "") or "").strip()
                     elif event_type == "meta":
@@ -804,6 +865,11 @@ except Exception as exc:
                     if percent != last_percent:
                         last_percent = percent
                         self.progressPercent.emit(percent)
+                    if percent >= 100:
+                        if completed_at is None:
+                            completed_at = time.monotonic()
+                    else:
+                        completed_at = None
                 else:
                     if not unknown_progress_reported:
                         self.progressPercent.emit(-1)
@@ -819,6 +885,20 @@ except Exception as exc:
                         f"{self._format_bytes(current_allocated)} downloaded so far."
                     )
                     last_heartbeat_at = now
+                if local_model_path:
+                    self._terminate_process()
+                    break
+                # Safety net: if progress reached 100% and stayed there, infer
+                # snapshot path and finish even when elevated wrapper lingers.
+                if completed_at is not None and (now - completed_at) >= 8.0 and not local_model_path:
+                    inferred_path = self._infer_snapshot_path(storage_dir)
+                    if inferred_path:
+                        local_model_path = inferred_path
+                        self.diagnostic.emit(
+                            "Completion event was delayed; inferred finished snapshot from local cache."
+                        )
+                        self._terminate_process()
+                        break
                 while True:
                     try:
                         stderr_line = stderr_queue.get_nowait()
