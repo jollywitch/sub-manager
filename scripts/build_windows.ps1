@@ -30,10 +30,13 @@ else {
     $installerVersion = "0.1.0"
 }
 
+$buildOutputDir = (Join-Path $PWD "dist/sub-manager")
+$outputDir = (Join-Path $PWD "dist")
+
 & $isccPath `
     "/DAppVersion=$installerVersion" `
-    "/DBuildOutputDir=dist\\sub-manager" `
-    "/DOutputDir=dist" `
+    "/DBuildOutputDir=$buildOutputDir" `
+    "/DOutputDir=$outputDir" `
     "installer\\windows\\sub-manager.iss"
 
 Write-Host "Build finished. See dist/ directory."

@@ -49,8 +49,11 @@ if not exist "%ISCC%" (
 for /f "usebackq delims=" %%v in (`python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"`) do set "RAW_VERSION=%%v"
 for /f "tokens=1-3 delims=.-" %%a in ("%RAW_VERSION%") do set "INSTALLER_VERSION=%%a.%%b.%%c"
 if "%INSTALLER_VERSION%"=="" set "INSTALLER_VERSION=0.1.0"
+set "ROOT_DIR=%CD%"
+set "BUILD_OUTPUT_DIR=%ROOT_DIR%\dist\sub-manager"
+set "OUTPUT_DIR=%ROOT_DIR%\dist"
 
-"%ISCC%" /DAppVersion=%INSTALLER_VERSION% /DBuildOutputDir=dist\sub-manager /DOutputDir=dist installer\windows\sub-manager.iss
+"%ISCC%" "/DAppVersion=%INSTALLER_VERSION%" "/DBuildOutputDir=%BUILD_OUTPUT_DIR%" "/DOutputDir=%OUTPUT_DIR%" installer\windows\sub-manager.iss
 
 if errorlevel 1 (
   echo Build failed.

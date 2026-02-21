@@ -59,10 +59,12 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
+          $buildOutputDir = Join-Path $PWD "dist/sub-manager"
+          $outputDir = Join-Path $PWD "dist"
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             "/DAppVersion=$env:INSTALLER_VERSION" `
-            "/DBuildOutputDir=dist\\sub-manager" `
-            "/DOutputDir=dist" `
+            "/DBuildOutputDir=$buildOutputDir" `
+            "/DOutputDir=$outputDir" `
             "installer\\windows\\sub-manager.iss"
 
       - name: Upload release asset (installer)

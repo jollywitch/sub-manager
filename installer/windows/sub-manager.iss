@@ -3,10 +3,10 @@
   #define AppVersion "0.1.0"
 #endif
 #ifndef BuildOutputDir
-  #define BuildOutputDir "dist\\sub-manager"
+  #define BuildOutputDir AddBackslash(SourcePath) + "..\\..\\dist\\sub-manager"
 #endif
 #ifndef OutputDir
-  #define OutputDir "dist"
+  #define OutputDir AddBackslash(SourcePath) + "..\\..\\dist"
 #endif
 
 [Setup]
