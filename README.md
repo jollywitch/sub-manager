@@ -22,6 +22,7 @@ Output:
 
 Notes:
 - QML assets are bundled into the executable build.
+- GLM-OCR Python runtime dependencies are installed on demand at first use.
 - Runtime writable data (logs, downloaded ffmpeg tools) is stored in:
   - `%LOCALAPPDATA%\sub-manager`
   - override with `SUB_MANAGER_HOME` environment variable.

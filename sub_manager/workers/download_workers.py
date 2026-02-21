@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import logging
 import os
 import queue
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from sub_manager.constants import APP_DATA_DIR
 from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 
 class FFmpegDownloadWorker(QObject):
@@ -119,6 +121,7 @@ class GlmOcrModelDownloadWorker(QObject):
         self.hf_token = (hf_token or "").strip() or None
         self._cancel_requested = False
         self._process: subprocess.Popen[str] | None = None
+        self._runtime_site_packages = APP_DATA_DIR / "runtime-packages"
 
     @Slot()
     def cancel(self) -> None:
@@ -170,12 +173,114 @@ class GlmOcrModelDownloadWorker(QObject):
         env["GLM_OCR_MODEL_ID"] = self.model_id
         if self.hf_token:
             env["HF_TOKEN"] = self.hf_token
+        runtime_path = str(self._runtime_site_packages)
+        existing_pythonpath = str(env.get("PYTHONPATH", "") or "").strip()
+        if existing_pythonpath:
+            env["PYTHONPATH"] = f"{runtime_path}{os.pathsep}{existing_pythonpath}"
+        else:
+            env["PYTHONPATH"] = runtime_path
         env.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
         xet_raw = str(env.get("HF_XET_HIGH_PERFORMANCE", "") or "").strip().lower()
         if xet_raw in {"0", "false", "no", "off"}:
             return env, False
         env["HF_XET_HIGH_PERFORMANCE"] = "1"
         return env, True
+
+    def _candidate_python_commands(self) -> list[list[str]]:
+        commands: list[list[str]] = []
+        seen: set[str] = set()
+
+        def add(cmd: list[str]) -> None:
+            key = " ".join(cmd)
+            if key in seen:
+                return
+            seen.add(key)
+            commands.append(cmd)
+
+        if sys.executable:
+            add([sys.executable])
+        if os.name == "nt":
+            add(["py", "-3"])
+        add(["python"])
+        return commands
+
+    def _ensure_runtime_packages_available(self) -> None:
+        package_dir = self._runtime_site_packages
+        package_dir.mkdir(parents=True, exist_ok=True)
+
+        package_dir_str = str(package_dir)
+        if package_dir_str not in sys.path:
+            sys.path.insert(0, package_dir_str)
+        importlib.invalidate_caches()
+
+        try:
+            import huggingface_hub  # type: ignore
+            _ = huggingface_hub
+            return
+        except Exception:
+            pass
+
+        self.progress.emit("Preparing GLM runtime dependencies...")
+        self.diagnostic.emit(
+            "Missing Python runtime package 'huggingface_hub'. Attempting automatic install."
+        )
+
+        packages = ["huggingface_hub>=0.28.0", "hf_transfer>=0.1.9"]
+        install_succeeded = False
+        last_error = ""
+        for cmd in self._candidate_python_commands():
+            if self._cancel_requested:
+                raise RuntimeError("GLM-OCR download cancelled.")
+            full_cmd = cmd + [
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--target",
+                package_dir_str,
+                *packages,
+            ]
+            self.diagnostic.emit(f"Trying dependency install via: {' '.join(cmd)} -m pip ...")
+            try:
+                result = subprocess.run(
+                    full_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    **windows_hidden_subprocess_kwargs(),
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                self.diagnostic.emit(f"Dependency install command failed to start: {exc}")
+                continue
+            if result.returncode == 0:
+                install_succeeded = True
+                stdout_text = str(result.stdout or "").strip()
+                if stdout_text:
+                    self.diagnostic.emit(stdout_text.splitlines()[-1])
+                break
+            stderr_text = str(result.stderr or "").strip()
+            if stderr_text:
+                self.diagnostic.emit(stderr_text.splitlines()[-1])
+                last_error = stderr_text
+
+        if not install_succeeded:
+            raise RuntimeError(
+                "Could not install required GLM runtime dependencies automatically. "
+                f"Last error: {last_error or 'unknown error'}"
+            )
+
+        importlib.invalidate_caches()
+        try:
+            import huggingface_hub  # type: ignore
+            _ = huggingface_hub
+        except Exception as exc:
+            raise RuntimeError(
+                "Dependency installation finished but 'huggingface_hub' is still unavailable."
+            ) from exc
+        self.diagnostic.emit(
+            f"Runtime dependencies installed to: {package_dir}"
+        )
 
     def _resolve_hub_storage_dir(self, env: dict[str, str]) -> Path:
         hub_cache = str(env.get("HUGGINGFACE_HUB_CACHE", "") or "").strip()
@@ -310,6 +415,7 @@ except Exception as exc:
                 "Starting isolated snapshot_download process "
                 f"(repo_id={self.model_id}, HUGGINGFACE_HUB_CACHE={hub_cache_env or '<default>'}, HF_HOME={hf_home_env or '<default>'}, token={'yes' if self.hf_token else 'no'})."
             )
+            self._ensure_runtime_packages_available()
             self.progress.emit("Downloading or reusing GLM-OCR model files...")
             env, xet_enabled = self._build_download_env()
             self.diagnostic.emit(
