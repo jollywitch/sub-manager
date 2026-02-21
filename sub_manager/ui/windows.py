@@ -212,7 +212,7 @@ class GlmDownloadSetupWindow(QWidget):
         self.xet_checkbox.setChecked(enable_xet)
         root_layout.addWidget(self.xet_checkbox)
 
-        xet_hint = QLabel("If not elevated on Windows, download will automatically fall back to standard transfer.")
+        xet_hint = QLabel("If enabled on Windows, the GLM download process will prompt for administrator approval (UAC).")
         xet_hint.setWordWrap(True)
         root_layout.addWidget(xet_hint)
 

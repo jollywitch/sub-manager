@@ -126,6 +126,9 @@ class GlmOcrModelDownloadWorker(QObject):
         self._runtime_site_packages = APP_DATA_DIR / "runtime-packages"
         self._runtime_python_dir = APP_DATA_DIR / "runtime-python"
         self._python_command: list[str] | None = None
+        self._snapshot_script_path: Path | None = None
+        self._snapshot_event_path: Path | None = None
+        self._snapshot_stderr_path: Path | None = None
 
     def _is_windows_admin(self) -> bool:
         if os.name != "nt":
@@ -195,7 +198,7 @@ class GlmOcrModelDownloadWorker(QObject):
                 env["PYTHONPATH"] = runtime_path
         env.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
         if os.name == "nt":
-            if self.enable_xet and self._is_windows_admin():
+            if self.enable_xet:
                 env["HF_HUB_DISABLE_XET"] = "0"
                 env["HF_XET_HIGH_PERFORMANCE"] = "1"
                 return env, True
@@ -492,16 +495,28 @@ import json
 import os
 import sys
 import traceback
-from huggingface_hub import HfApi, snapshot_download
 
 repo = os.environ["GLM_OCR_MODEL_ID"]
 token = os.environ.get("HF_TOKEN") or None
+event_file = os.environ.get("GLM_OCR_EVENT_FILE") or ""
+stderr_file = os.environ.get("GLM_OCR_STDERR_FILE") or ""
 
 def emit(obj):
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\\n")
+    payload = json.dumps(obj, ensure_ascii=False)
+    sys.stdout.write(payload + "\\n")
     sys.stdout.flush()
+    if event_file:
+        with open(event_file, "a", encoding="utf-8") as f:
+            f.write(payload + "\\n")
+
+def emit_stderr(text):
+    if not stderr_file:
+        return
+    with open(stderr_file, "a", encoding="utf-8") as f:
+        f.write(str(text) + "\\n")
 
 try:
+    from huggingface_hub import HfApi, snapshot_download
     try:
         info = HfApi().model_info(repo_id=repo, token=token, files_metadata=True)
         total = 0
@@ -516,13 +531,151 @@ try:
     path = snapshot_download(repo_id=repo, token=token)
     emit({"type": "done", "path": str(path)})
 except Exception as exc:
+    emit_stderr(traceback.format_exc())
     emit({"type": "error", "message": f"{type(exc).__name__}: {exc}\\n{traceback.format_exc()}"})
     raise
 """
 
+    def _single_quote_for_powershell(self, value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    def _start_elevated_snapshot_subprocess(
+        self, env: dict[str, str]
+    ) -> tuple[queue.Queue[dict[str, object]], queue.Queue[str], threading.Thread, threading.Thread]:
+        python_command = self._resolve_python_command()
+        python_exe = str(Path(python_command[0]).resolve())
+        temp_dir = APP_DATA_DIR / "runtime-tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        suffix = f"{os.getpid()}-{int(time.time() * 1000)}"
+        self._snapshot_script_path = temp_dir / f"glm_snapshot_{suffix}.py"
+        self._snapshot_event_path = temp_dir / f"glm_snapshot_{suffix}.jsonl"
+        self._snapshot_stderr_path = temp_dir / f"glm_snapshot_{suffix}.stderr.log"
+        self._snapshot_script_path.write_text(self._snapshot_download_script(), encoding="utf-8")
+        self._snapshot_event_path.write_text("", encoding="utf-8")
+        self._snapshot_stderr_path.write_text("", encoding="utf-8")
+        env["GLM_OCR_EVENT_FILE"] = str(self._snapshot_event_path)
+        env["GLM_OCR_STDERR_FILE"] = str(self._snapshot_stderr_path)
+
+        ps_script = (
+            "$ErrorActionPreference='Stop';"
+            f"Start-Process -FilePath {self._single_quote_for_powershell(python_exe)} "
+            f"-ArgumentList @({self._single_quote_for_powershell(str(self._snapshot_script_path))}) "
+            "-Verb RunAs -WindowStyle Hidden -Wait"
+        )
+        self._process = subprocess.Popen(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            text=True,
+            bufsize=1,
+            **windows_hidden_subprocess_kwargs(),
+        )
+        event_queue: queue.Queue[dict[str, object]] = queue.Queue()
+        stderr_queue: queue.Queue[str] = queue.Queue()
+
+        def consume_event_file() -> None:
+            offset = 0
+            while True:
+                path = self._snapshot_event_path
+                if path and path.exists():
+                    try:
+                        with path.open("r", encoding="utf-8", errors="replace") as handle:
+                            handle.seek(offset)
+                            chunk = handle.read()
+                            offset = handle.tell()
+                    except Exception:
+                        chunk = ""
+                    for raw_line in chunk.splitlines():
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            payload = json.loads(line)
+                        except Exception:
+                            stderr_queue.put(f"[event] {line}")
+                            continue
+                        if isinstance(payload, dict):
+                            event_queue.put(payload)
+                process = self._process
+                if process is None or process.poll() is not None:
+                    break
+                time.sleep(0.1)
+            path = self._snapshot_event_path
+            if path and path.exists():
+                try:
+                    with path.open("r", encoding="utf-8", errors="replace") as handle:
+                        handle.seek(offset)
+                        chunk = handle.read()
+                except Exception:
+                    chunk = ""
+                for raw_line in chunk.splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        stderr_queue.put(f"[event] {line}")
+                        continue
+                    if isinstance(payload, dict):
+                        event_queue.put(payload)
+
+        def consume_stderr() -> None:
+            offset = 0
+            while True:
+                path = self._snapshot_stderr_path
+                if path and path.exists():
+                    try:
+                        with path.open("r", encoding="utf-8", errors="replace") as handle:
+                            handle.seek(offset)
+                            chunk = handle.read()
+                            offset = handle.tell()
+                    except Exception:
+                        chunk = ""
+                    for raw_line in chunk.splitlines():
+                        line = raw_line.strip()
+                        if line:
+                            stderr_queue.put(line)
+                process = self._process
+                if process is None or process.poll() is not None:
+                    break
+                time.sleep(0.1)
+            path = self._snapshot_stderr_path
+            if path and path.exists():
+                try:
+                    with path.open("r", encoding="utf-8", errors="replace") as handle:
+                        handle.seek(offset)
+                        chunk = handle.read()
+                except Exception:
+                    chunk = ""
+                for raw_line in chunk.splitlines():
+                    line = raw_line.strip()
+                    if line:
+                        stderr_queue.put(line)
+            process = self._process
+            if process is not None and process.stderr is not None:
+                for raw_line in process.stderr:
+                    line = raw_line.strip()
+                    if line:
+                        stderr_queue.put(f"[powershell] {line}")
+            if process is not None and process.stdout is not None:
+                for raw_line in process.stdout:
+                    line = raw_line.strip()
+                    if line:
+                        stderr_queue.put(f"[powershell] {line}")
+
+        stdout_thread = threading.Thread(target=consume_event_file, daemon=True)
+        stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        return event_queue, stderr_queue, stdout_thread, stderr_thread
+
     def _start_snapshot_subprocess(
         self, env: dict[str, str]
     ) -> tuple[queue.Queue[dict[str, object]], queue.Queue[str], threading.Thread, threading.Thread]:
+        if os.name == "nt" and self.enable_xet and not self._is_windows_admin():
+            return self._start_elevated_snapshot_subprocess(env)
         python_command = self._resolve_python_command()
         self._process = subprocess.Popen(
             [*python_command, "-c", self._snapshot_download_script()],
@@ -594,10 +747,9 @@ except Exception as exc:
             self._ensure_runtime_packages_available()
             self.progress.emit("Downloading or reusing GLM-OCR model files...")
             env, xet_enabled = self._build_download_env()
-            if os.name == "nt" and self.enable_xet and not xet_enabled:
+            if os.name == "nt" and self.enable_xet and not self._is_windows_admin():
                 self.diagnostic.emit(
-                    "Xet was requested but this session is not running as administrator. "
-                    "Falling back to standard transfer."
+                    "Xet was requested. Triggering UAC elevation for GLM download process."
                 )
             self.diagnostic.emit(
                 f"transfer_mode=xet_high_performance:{'on' if xet_enabled else 'off'}"
@@ -729,3 +881,12 @@ except Exception as exc:
         finally:
             self._terminate_process()
             self._process = None
+            for temp_path in (self._snapshot_script_path, self._snapshot_event_path, self._snapshot_stderr_path):
+                try:
+                    if temp_path:
+                        temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            self._snapshot_script_path = None
+            self._snapshot_event_path = None
+            self._snapshot_stderr_path = None

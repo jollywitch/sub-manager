@@ -1210,6 +1210,9 @@ class AppBackend(QObject):
     def _on_download_thread_finished(self) -> None:
         self._set_downloading(False)
         self._cleanup_worker_thread("download_thread", "download_worker")
+        # Final refresh after thread teardown so "Installing..." can transition
+        # to Ready/Missing without requiring the Dependencies window to reopen.
+        self._refresh_ffmpeg_status()
 
     def _set_downloading(self, value: bool) -> None:
         if self._downloading != value:
