@@ -10,30 +10,9 @@
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="Sub Manager" />
+      <Directory Id="INSTALLFOLDER" Name="Sub Manager">
+        <Files Include="$(var.BuildOutputDir)\**" />
+      </Directory>
     </StandardDirectory>
-
-    <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ProgramMenuSubManager" Name="Sub Manager" />
-    </StandardDirectory>
-
-    <Feature Id="MainFeature" Title="Sub Manager" Level="1">
-      <ComponentGroupRef Id="AppFiles" />
-      <ComponentRef Id="StartMenuShortcutComponent" />
-    </Feature>
-
-    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
-      <Files Include="$(var.BuildOutputDir)\**" />
-    </ComponentGroup>
-
-    <Component Id="StartMenuShortcutComponent" Directory="ProgramMenuSubManager" Guid="7A492C6B-31A0-4880-B98D-EAD1125EC180">
-      <Shortcut
-        Id="StartMenuShortcut"
-        Name="Sub Manager"
-        Target="[INSTALLFOLDER]sub-manager.exe"
-        WorkingDirectory="INSTALLFOLDER" />
-      <RemoveFolder Id="RemoveProgramMenuSubManagerFolder" On="uninstall" />
-      <RegistryValue Root="HKCU" Key="Software\sub-manager" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-    </Component>
   </Package>
 </Wix>
