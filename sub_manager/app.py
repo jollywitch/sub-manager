@@ -46,10 +46,17 @@ def _configure_session_logging() -> None:
 
 def main() -> int:
     _configure_session_logging()
+    logging.info(
+        "Runtime context: os=%s frozen=%s executable=%s",
+        os.name,
+        bool(getattr(sys, "frozen", False)),
+        sys.executable,
+    )
     if os.name != "nt" and "WSL_DISTRO_NAME" in os.environ:
         os.environ.setdefault("QT_QUICK_BACKEND", "software")
         os.environ.setdefault("QT_OPENGL", "software")
         os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+        logging.info("WSL detected. Forced software rendering backend for Qt.")
 
     app = QApplication(sys.argv)
     # Prevent secondary top-level QWidget dialogs from ending the whole app.

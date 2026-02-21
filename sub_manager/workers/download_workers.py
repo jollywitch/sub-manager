@@ -930,10 +930,14 @@ except Exception as exc:
                 self.diagnostic.emit(stderr_line)
             return_code = int(self._process.returncode or 0)
             self._process = None
-            if return_code != 0:
+            if return_code != 0 and local_model_path:
+                self.diagnostic.emit(
+                    "Wrapper process exited with a non-zero code after model completion; treating as success."
+                )
+            elif return_code != 0:
                 error_text = (
                     last_error
-                    or "Hugging Face download process failed. Check terminal output for details."
+                    or "Hugging Face download process failed. Check session.log diagnostics for details."
                 ).strip()
                 raise RuntimeError(error_text)
             if not local_model_path:

@@ -133,6 +133,12 @@ class AppBackend(QObject):
 
         self._apply_hf_token_environment_from_settings()
         self._refresh_dependency_statuses()
+        logging.info(
+            "Backend initialized: app_data=%s ffmpeg_config=%s hf_token_saved=%s",
+            str(FFMPEG_TOOLS_DIR.parent),
+            self.settings.value("ffmpeg/bin_dir"),
+            bool(self._get_saved_hf_token()),
+        )
 
     def get_video_files(self) -> list[VideoFileItem]:
         return self._video_files
@@ -268,6 +274,11 @@ class AppBackend(QObject):
     def _set_active_subwindow(self, window_id: str) -> None:
         normalized = window_id.strip()
         if self._active_subwindow_id != normalized:
+            logging.info(
+                "Sub-window state changed: previous=%s current=%s",
+                self._active_subwindow_id or "<none>",
+                normalized or "<none>",
+            )
             self._active_subwindow_id = normalized
             self.subWindowStateChanged.emit()
 
@@ -277,6 +288,11 @@ class AppBackend(QObject):
             return True
         active = self._active_subwindow_id
         if active and active != normalized:
+            logging.info(
+                "Blocked opening sub-window '%s' because '%s' is active. Focusing active window.",
+                normalized,
+                active,
+            )
             self._focus_subwindow(active)
             return False
         self._set_active_subwindow(normalized)
@@ -287,6 +303,7 @@ class AppBackend(QObject):
             self._set_active_subwindow("")
 
     def _focus_subwindow(self, window_id: str) -> None:
+        logging.info("Focus requested for sub-window: %s", window_id)
         if window_id == "subtitle_editor" and self._subtitle_editor is not None and self._subtitle_editor.isVisible():
             self._subtitle_editor.raise_()
             self._subtitle_editor.activateWindow()
@@ -328,16 +345,23 @@ class AppBackend(QObject):
 
     @Slot(str)
     def notifySubWindowOpened(self, window_id: str) -> None:
+        logging.info("Sub-window opened notification: %s", window_id)
         self._set_active_subwindow(window_id.strip())
 
     @Slot(str)
     def notifySubWindowClosed(self, window_id: str) -> None:
+        logging.info("Sub-window closed notification: %s", window_id)
         self._release_subwindow(window_id.strip())
 
     def _start_glm_ocr_model_download(
         self,
         after_download_action: Callable[[], None] | None = None,
     ) -> None:
+        logging.info(
+            "Starting GLM download flow: thread_running=%s followup=%s",
+            bool(self._glm_download_thread is not None and self._glm_download_thread.isRunning()),
+            bool(after_download_action is not None),
+        )
         if self._glm_download_thread is not None:
             if self._glm_download_thread.isRunning():
                 if after_download_action is not None:
@@ -369,6 +393,12 @@ class AppBackend(QObject):
             GLM_OCR_MODEL_ID,
             hf_token=hf_token,
             enable_xet=enable_xet,
+        )
+        logging.info(
+            "GLM download worker configured: model_id=%s xet_enabled=%s token_configured=%s",
+            GLM_OCR_MODEL_ID,
+            enable_xet,
+            bool(hf_token),
         )
         self._glm_download_worker.moveToThread(self._glm_download_thread)
         self._glm_download_thread.started.connect(self._glm_download_worker.run)
@@ -402,6 +432,7 @@ class AppBackend(QObject):
         self,
         continue_action: Callable[[], None],
     ) -> None:
+        logging.info("Opening GLM setup window.")
         if not self._try_activate_subwindow("glm_setup"):
             return
         if self._glm_setup_window is not None and self._glm_setup_window.isVisible():
@@ -428,6 +459,11 @@ class AppBackend(QObject):
         window.activateWindow()
 
     def _on_glm_setup_download_clicked(self, token: str, enable_xet: bool) -> None:
+        logging.info(
+            "GLM setup confirmed: token_provided=%s enable_xet=%s",
+            bool(token.strip()),
+            bool(enable_xet),
+        )
         if token:
             self.setHfToken(token)
         self.settings.setValue("glm/enable_xet", bool(enable_xet))
@@ -442,10 +478,12 @@ class AppBackend(QObject):
         return self._dependency_service.current_hf_token()
 
     def _on_glm_setup_cancelled(self) -> None:
+        logging.info("GLM setup cancelled by user.")
         self._glm_download_followup_action = None
 
     @Slot()
     def _on_glm_setup_window_destroyed(self) -> None:
+        logging.info("GLM setup window destroyed.")
         self._glm_setup_window = None
         self._release_subwindow("glm_setup")
 
@@ -453,6 +491,7 @@ class AppBackend(QObject):
         if not self._try_activate_subwindow("glm_download_progress"):
             return
         if self._glm_download_progress_dismissed:
+            logging.info("GLM download progress update ignored because window is dismissed.")
             return
         window = self._glm_download_progress_window
         if window is not None and window.isVisible():
@@ -489,6 +528,8 @@ class AppBackend(QObject):
 
     @Slot(int)
     def _on_glm_download_progress_percent(self, percent: int) -> None:
+        if percent in {-1, 0, 100} or percent % 10 == 0:
+            logging.info("GLM download progress percent: %s", percent)
         window = self._glm_download_progress_window
         if window is not None:
             window.set_progress(percent)
@@ -497,6 +538,7 @@ class AppBackend(QObject):
     def _on_glm_download_finished(self, local_model_path: str) -> None:
         if self._glm_download_cancel_requested:
             return
+        logging.info("GLM download finished successfully: %s", local_model_path)
         self._append_glm_download_diagnostic(f"Download finished. Local path: {local_model_path}")
         followup_action = self._glm_download_followup_action
         self._glm_download_followup_action = None
@@ -516,6 +558,7 @@ class AppBackend(QObject):
     def _on_glm_download_failed(self, error_message: str) -> None:
         if self._glm_download_cancel_requested or error_message.strip() == "GLM-OCR download cancelled.":
             return
+        logging.error("GLM download failed: %s", error_message)
         self._append_glm_download_diagnostic(f"Failure: {error_message}")
         self._glm_download_followup_action = None
         self._close_glm_download_progress_box()
@@ -531,6 +574,7 @@ class AppBackend(QObject):
     def _cancel_glm_download(self, status_text: str | None = None) -> None:
         if self._glm_download_thread is None or not self._glm_download_thread.isRunning():
             return
+        logging.info("GLM download cancel requested. status_text=%s", status_text or "")
         self._glm_download_cancel_requested = True
         self._glm_download_followup_action = None
         self._append_glm_download_diagnostic("Cancellation requested by user.")
@@ -553,12 +597,14 @@ class AppBackend(QObject):
 
     @Slot()
     def _on_glm_download_progress_window_destroyed(self) -> None:
+        logging.info("GLM progress window destroyed. download_running=%s", bool(self._glm_download_thread and self._glm_download_thread.isRunning()))
         self._glm_download_progress_window = None
         self._release_subwindow("glm_download_progress")
         if self._glm_download_thread is not None and self._glm_download_thread.isRunning():
             self._glm_download_progress_dismissed = True
 
     def _on_glm_download_thread_finished(self) -> None:
+        logging.info("GLM download worker thread finished.")
         self._cleanup_worker_thread("_glm_download_thread", "_glm_download_worker")
         self._glm_download_progress_dismissed = False
         self._glm_download_cancel_requested = False
@@ -568,6 +614,7 @@ class AppBackend(QObject):
     @Slot(str)
     def setHfToken(self, token: str) -> None:
         clean_token = token.strip()
+        logging.info("HF token updated: provided=%s", bool(clean_token))
         if clean_token:
             self.settings.setValue("hf/token", clean_token)
             self._os.environ["HF_TOKEN"] = clean_token
@@ -578,6 +625,7 @@ class AppBackend(QObject):
 
     @Slot()
     def clearHfToken(self) -> None:
+        logging.info("HF token cleared by user.")
         self.settings.remove("hf/token")
         self._os.environ.pop("HF_TOKEN", None)
         self._refresh_hf_token_status()
@@ -592,6 +640,7 @@ class AppBackend(QObject):
 
     @Slot(str, int)
     def editSubtitle(self, file_path: str, stream_index: int) -> None:
+        logging.info("Edit subtitle requested: file=%s stream_index=%s", file_path, stream_index)
         if stream_index < 0:
             self._show_info("Subtitle Editor", "No editable subtitle stream selected.")
             return
@@ -612,6 +661,7 @@ class AppBackend(QObject):
             return
 
         codec_name = str(stream.get("codec_name", "unknown")).strip().lower() or "unknown"
+        logging.info("Subtitle stream resolved: codec=%s file=%s stream_index=%s", codec_name, file_path, stream_index)
         editor_key = f"{self._os.path.abspath(file_path)}::{stream_index}"
         if not self._can_open_editor(editor_key):
             return
@@ -675,6 +725,13 @@ class AppBackend(QObject):
         subtitle_text: str,
         editor_key: str,
     ) -> None:
+        logging.info(
+            "Opening subtitle editor: file=%s stream_index=%s codec=%s language=%s",
+            file_path,
+            stream_index,
+            codec_name,
+            stream_lang,
+        )
         if self._subtitle_editor is not None and self._subtitle_editor.isVisible():
             if self._subtitle_editor_key == editor_key:
                 self._subtitle_editor.raise_()
@@ -741,6 +798,12 @@ class AppBackend(QObject):
         codec_name: str,
         editor_key: str,
     ) -> None:
+        logging.info(
+            "Image subtitle OCR requested: file=%s stream_index=%s codec=%s",
+            file_path,
+            stream_index,
+            codec_name,
+        )
         if self._ocr_thread is not None and self._ocr_thread.isRunning():
             self._show_info(
                 "Subtitle OCR",
@@ -763,6 +826,13 @@ class AppBackend(QObject):
         codec_name: str,
         editor_key: str,
     ) -> None:
+        logging.info(
+            "Starting OCR worker: file=%s stream_index=%s codec=%s token_configured=%s",
+            file_path,
+            stream_index,
+            codec_name,
+            bool(self._current_hf_token()),
+        )
         if self._ocr_thread is not None and self._ocr_thread.isRunning():
             self._show_info(
                 "Subtitle OCR",
@@ -807,7 +877,9 @@ class AppBackend(QObject):
         codec_name: str,
         editor_key: str,
     ) -> None:
+        logging.info("Checking GLM model availability before OCR.")
         if self._find_local_glm_ocr_model_directory() is None:
+            logging.info("GLM model missing. Opening setup before OCR.")
             self._show_glm_download_setup(
                 continue_action=lambda: self._start_image_subtitle_ocr(
                     file_path=file_path,
@@ -837,10 +909,12 @@ class AppBackend(QObject):
     def _on_ocr_progress(self, message: str) -> None:
         if self._ocr_cancel_requested:
             return
+        logging.info("OCR progress: %s", message)
         self._show_ocr_progress(message)
 
     @Slot(str)
     def _on_ocr_finished(self, srt_text: str) -> None:
+        logging.info("OCR finished successfully. output_length=%s", len(srt_text))
         self._close_ocr_progress_box()
         self._refresh_glm_ocr_model_status()
         file_path = self._ocr_target_file_path
@@ -873,6 +947,7 @@ class AppBackend(QObject):
 
     @Slot(str)
     def _on_ocr_failed(self, error_message: str) -> None:
+        logging.error("OCR failed: %s", error_message)
         self._close_ocr_progress_box()
         self._refresh_glm_ocr_model_status()
         if error_message.strip() == "OCR cancelled.":
@@ -884,11 +959,13 @@ class AppBackend(QObject):
 
     @Slot()
     def cancelOcrOperation(self) -> None:
+        logging.info("OCR cancel requested by user.")
         self._ocr_cancel_requested = True
         self._cancel_ocr_operation("Cancelling OCR...")
 
     @Slot()
     def dismissOcrProgressWindow(self) -> None:
+        logging.info("OCR progress window dismissed by user.")
         self._ocr_progress_dismissed = True
         self._release_subwindow("ocr_progress")
         self.ocrProgressHidden.emit()
@@ -910,6 +987,7 @@ class AppBackend(QObject):
         self.ocrProgressHidden.emit()
 
     def _on_ocr_thread_finished(self) -> None:
+        logging.info("OCR worker thread finished.")
         self._cleanup_worker_thread("_ocr_thread", "_ocr_worker")
         self._ocr_target_key = None
         self._ocr_target_file_path = None
@@ -922,12 +1000,14 @@ class AppBackend(QObject):
 
     @Slot()
     def _on_subtitle_editor_destroyed(self) -> None:
+        logging.info("Subtitle editor window destroyed.")
         self._subtitle_editor = None
         self._subtitle_editor_key = None
         self._release_subwindow("subtitle_editor")
 
     @Slot(str, int)
     def showSubtitleInfo(self, file_path: str, stream_index: int) -> None:
+        logging.info("Subtitle info requested: file=%s stream_index=%s", file_path, stream_index)
         if stream_index < 0:
             self._show_info("Subtitle Info", "No subtitle stream selected.")
             return
@@ -1022,6 +1102,7 @@ class AppBackend(QObject):
 
     @Slot()
     def selectFfmpegDirectory(self) -> None:
+        logging.info("Select FFmpeg directory requested.")
         if not self._try_activate_subwindow("ffmpeg_directory_select"):
             return
         initial_dir = self.settings.value("ffmpeg/bin_dir")
@@ -1032,6 +1113,7 @@ class AppBackend(QObject):
         )
         selected_dir = QFileDialog.getExistingDirectory(None, "Select FFmpeg Directory", start_dir)
         self._release_subwindow("ffmpeg_directory_select")
+        logging.info("FFmpeg directory selection result: selected=%s", bool(selected_dir))
         if not selected_dir:
             return
         ffmpeg_path = self._binary_from_directory(selected_dir, "ffmpeg")
@@ -1047,6 +1129,7 @@ class AppBackend(QObject):
 
     @Slot()
     def searchFfmpegInPath(self) -> None:
+        logging.info("Searching ffmpeg/ffprobe in PATH.")
         previous_dir = self.settings.value("ffmpeg/bin_dir")
         self.settings.remove("ffmpeg/bin_dir")
         self._refresh_ffmpeg_status()
@@ -1058,7 +1141,9 @@ class AppBackend(QObject):
 
     @Slot()
     def downloadFfmpeg(self) -> None:
+        logging.info("FFmpeg automatic download requested.")
         if self.download_thread is not None:
+            logging.info("Ignoring FFmpeg download request because a download is already running.")
             return
         asset_info = self._resolve_btbn_asset()
         if asset_info is None:
@@ -1087,6 +1172,7 @@ class AppBackend(QObject):
         return bool(ffmpeg_path and ffprobe_path)
 
     def _confirm_ffmpeg_override(self, download_url: str, archive_ext: str, tools_dir: Path) -> None:
+        logging.info("Existing FFmpeg binaries detected. Showing override prompt: dir=%s", tools_dir)
         if not self._try_activate_subwindow("ffmpeg_override"):
             return
         if self._ffmpeg_override_box is not None and self._ffmpeg_override_box.isVisible():
@@ -1133,6 +1219,7 @@ class AppBackend(QObject):
         box.open()
 
     def _use_existing_tools_ffmpeg(self, tools_dir: str) -> None:
+        logging.info("Using existing FFmpeg binaries from tools directory: %s", tools_dir)
         bin_dir = str(Path(tools_dir) / "bin")
         self.settings.setValue("ffmpeg/bin_dir", bin_dir)
         self._refresh_ffmpeg_status()
@@ -1144,6 +1231,10 @@ class AppBackend(QObject):
         archive_ext: str,
         tools_dir: str,
     ) -> None:
+        logging.info(
+            "FFmpeg override prompt resolved: action=%s",
+            "download_override" if button == self._ffmpeg_override_download_button else "use_existing",
+        )
         self._ffmpeg_override_decided = True
         if button == self._ffmpeg_override_download_button:
             self._start_ffmpeg_download(download_url, archive_ext, Path(tools_dir))
@@ -1156,12 +1247,14 @@ class AppBackend(QObject):
         archive_ext: str,
         tools_dir: str,
     ) -> None:
+        logging.info("FFmpeg override dialog finished. explicit_decision=%s", self._ffmpeg_override_decided)
         if self._ffmpeg_override_decided:
             return
         self._use_existing_tools_ffmpeg(tools_dir)
 
     @Slot(int)
     def _cleanup_ffmpeg_override_box(self, _result: int) -> None:
+        logging.info("FFmpeg override dialog cleaned up.")
         self._ffmpeg_override_box = None
         self._ffmpeg_override_download_button = None
         self._ffmpeg_override_use_existing_button = None
@@ -1172,6 +1265,12 @@ class AppBackend(QObject):
         if self.download_thread is not None:
             return
 
+        logging.info(
+            "Starting FFmpeg download worker: url=%s archive_ext=%s tools_dir=%s",
+            download_url,
+            archive_ext,
+            tools_dir,
+        )
         self._set_downloading(True)
         self._set_ffmpeg_status("progress", "Starting FFmpeg download...")
         self.download_thread = QThread(self)
@@ -1192,6 +1291,7 @@ class AppBackend(QObject):
 
     @Slot(str)
     def _on_download_finished(self, install_bin_dir: str) -> None:
+        logging.info("FFmpeg download finished. install_bin_dir=%s", install_bin_dir)
         self.settings.setValue("ffmpeg/bin_dir", install_bin_dir)
         self._refresh_ffmpeg_status()
         self._show_info(
@@ -1201,6 +1301,7 @@ class AppBackend(QObject):
 
     @Slot(str)
     def _on_download_failed(self, error_message: str) -> None:
+        logging.error("FFmpeg download failed: %s", error_message)
         self._set_ffmpeg_status("error", "FFmpeg download failed.")
         self._show_critical(
             "Download Failed",
@@ -1208,6 +1309,7 @@ class AppBackend(QObject):
         )
 
     def _on_download_thread_finished(self) -> None:
+        logging.info("FFmpeg download thread finished.")
         self._set_downloading(False)
         self._cleanup_worker_thread("download_thread", "download_worker")
         # Final refresh after thread teardown so "Installing..." can transition
@@ -1216,11 +1318,13 @@ class AppBackend(QObject):
 
     def _set_downloading(self, value: bool) -> None:
         if self._downloading != value:
+            logging.info("Download state changed: downloading=%s", value)
             self._downloading = value
             self.downloadingChanged.emit()
 
     @Slot(int, int, int, int)
     def saveWindowGeometry(self, x: int, y: int, w: int, h: int) -> None:
+        logging.info("Main window geometry saved: x=%s y=%s w=%s h=%s", x, y, w, h)
         self._window_x, self._window_y, self._window_w, self._window_h = x, y, w, h
         self.settings.setValue("window/x", x)
         self.settings.setValue("window/y", y)
@@ -1229,31 +1333,39 @@ class AppBackend(QObject):
 
     @Slot(result=bool)
     def requestClose(self) -> bool:
+        logging.info("Application close requested.")
         if self._active_subwindow_id:
+            logging.info("Close blocked: active_subwindow=%s", self._active_subwindow_id)
             self._focus_subwindow(self._active_subwindow_id)
             return False
         if self.download_thread is not None and self.download_thread.isRunning():
+            logging.info("Close blocked: FFmpeg download is running.")
             self._show_info(
                 "Download in Progress",
                 "Please wait for FFmpeg download to finish before closing the app.",
             )
             return False
         if self._glm_download_thread is not None and self._glm_download_thread.isRunning():
+            logging.info("Close requested while GLM download running; attempting cancellation.")
             self._cancel_glm_download("Stopping GLM-OCR download for shutdown...")
             if self._glm_download_thread is not None and self._glm_download_thread.isRunning():
+                logging.warning("Close blocked: GLM download did not stop in time.")
                 self._show_warning(
                     "GLM-OCR Shutdown",
                     "GLM-OCR download did not stop in time. Please try again in a moment.",
                 )
                 return False
         if self._ocr_thread is not None and self._ocr_thread.isRunning():
+            logging.info("Close requested while OCR running; attempting cancellation.")
             self._cancel_ocr_operation("Stopping OCR for shutdown...")
             if not self._wait_for_ocr_shutdown(timeout_ms=2500):
+                logging.warning("OCR did not stop in time; forcing thread stop.")
                 self._show_warning(
                     "OCR Shutdown",
                     "OCR did not stop in time and will be force-stopped.",
                 )
                 self._force_stop_ocr_thread()
+        logging.info("Application close request accepted.")
         return True
 
     def _wait_for_ocr_shutdown(self, timeout_ms: int) -> bool:
@@ -1272,14 +1384,17 @@ class AppBackend(QObject):
             return True
         if not thread.isRunning():
             return True
+        logging.info("Stopping thread: name=%s wait_ms=%s force_wait_ms=%s", thread.objectName() or "<unnamed>", wait_ms, force_wait_ms)
         thread.requestInterruption()
         thread.quit()
         if thread.wait(wait_ms):
             return True
+        logging.warning("Thread did not stop gracefully; terminating.")
         thread.terminate()
         return thread.wait(force_wait_ms)
 
     def _cleanup_worker_thread(self, thread_attr: str, worker_attr: str) -> None:
+        logging.info("Cleaning up worker/thread refs: thread_attr=%s worker_attr=%s", thread_attr, worker_attr)
         worker = getattr(self, worker_attr)
         if worker is not None:
             worker.deleteLater()
@@ -1290,6 +1405,7 @@ class AppBackend(QObject):
             setattr(self, thread_attr, None)
 
     def clear_session_ocr_state(self) -> None:
+        logging.info("Clearing session OCR cache and model cache.")
         self._ocr_srt_cache.clear()
         ImageSubtitleOcrWorker.clear_model_cache()
 
@@ -1342,6 +1458,7 @@ class AppBackend(QObject):
 
     def _set_hf_token_status(self, level: str, text: str) -> None:
         if self._hf_token_status != text:
+            logging.info("HF token status changed: level=%s text=%s", level, text)
             self._hf_token_status = text
             self.hfTokenStatusChanged.emit()
         if self._hf_token_status_level != level:
@@ -1355,6 +1472,7 @@ class AppBackend(QObject):
 
     def _set_glm_ocr_model_status(self, level: str, text: str) -> None:
         if self._glm_ocr_model_status != text:
+            logging.info("GLM model status changed: level=%s text=%s", level, text)
             self._glm_ocr_model_status = text
             self.glmOcrModelStatusChanged.emit()
         if self._glm_ocr_model_status_level != level:
@@ -1363,6 +1481,7 @@ class AppBackend(QObject):
 
     def _set_ffmpeg_status(self, level: str, text: str) -> None:
         if self._ffmpeg_status != text:
+            logging.info("FFmpeg status changed: level=%s text=%s", level, text)
             self._ffmpeg_status = text
             self.ffmpegStatusChanged.emit()
         if self._ffmpeg_status_level != level:
@@ -1379,6 +1498,7 @@ class AppBackend(QObject):
         return self._dependency_service.binary_from_directory(directory, binary_name)
 
     def _refresh_dependency_statuses(self) -> None:
+        logging.info("Refreshing dependency statuses.")
         self._refresh_ffmpeg_status()
         self._refresh_hf_token_status()
         self._refresh_glm_ocr_model_status()
