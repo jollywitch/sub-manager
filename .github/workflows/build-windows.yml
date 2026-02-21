@@ -35,7 +35,6 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 4.*
-          wix extension add WixToolset.Heat
           "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Resolve MSI version
@@ -53,10 +52,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/wix | Out-Null
-          wix harvest directory dist/sub-manager `
-            -dr INSTALLFOLDER `
-            -cg AppFiles `
-            -o build/wix/sub-manager-files.wxs
+          python scripts/generate_wix_fragment.py `
+            --input-dir dist/sub-manager `
+            --output-file build/wix/sub-manager-files.wxs `
+            --component-group AppFiles `
+            --directory-ref INSTALLFOLDER
           wix build installer/windows/sub-manager.wxs `
             build/wix/sub-manager-files.wxs `
             -arch x64 `

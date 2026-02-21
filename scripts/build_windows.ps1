@@ -18,7 +18,6 @@ if (-not $wixCommand) {
         $env:PATH = "$env:PATH;$toolPath"
     }
 }
-wix extension add WixToolset.Heat | Out-Null
 
 $rawVersion = (python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])").Trim()
 if ($rawVersion -match '^(\d+)\.(\d+)\.(\d+)') {
@@ -32,10 +31,11 @@ $wixDir = "build/wix"
 if (-not (Test-Path $wixDir)) {
     New-Item -ItemType Directory -Path $wixDir | Out-Null
 }
-wix harvest directory dist/sub-manager `
-    -dr INSTALLFOLDER `
-    -cg AppFiles `
-    -o build/wix/sub-manager-files.wxs
+python scripts/generate_wix_fragment.py `
+    --input-dir dist/sub-manager `
+    --output-file build/wix/sub-manager-files.wxs `
+    --component-group AppFiles `
+    --directory-ref INSTALLFOLDER
 
 wix build installer/windows/sub-manager.wxs `
     build/wix/sub-manager-files.wxs `
