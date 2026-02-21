@@ -1389,6 +1389,10 @@ class AppBackend(QObject):
         return self._dependency_service.find_local_glm_ocr_model_directory()
 
     def _refresh_ffmpeg_status(self) -> None:
+        # Preserve active FFmpeg download status text; do not overwrite it with
+        # PATH/manual checks while the worker thread is running.
+        if self._downloading or (self.download_thread is not None and self.download_thread.isRunning()):
+            return
         self.ffmpeg_path = None
         self.ffprobe_path = None
         configured_dir = self.settings.value("ffmpeg/bin_dir")
