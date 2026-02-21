@@ -18,6 +18,40 @@ def generate_fragment(input_dir: Path, output_file: Path, component_group: str, 
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # Build the set of all relative directories to recreate the folder tree in MSI.
+    dir_paths = {Path(".")}
+    for path in files:
+        rel_parent = path.relative_to(input_dir).parent
+        while True:
+            dir_paths.add(rel_parent)
+            if rel_parent == Path("."):
+                break
+            rel_parent = rel_parent.parent
+
+    sorted_dirs = sorted(dir_paths, key=lambda p: (len(p.parts), p.as_posix()))
+    dir_id_map: dict[Path, str] = {Path("."): directory_ref}
+    for rel_dir in sorted_dirs:
+        if rel_dir == Path("."):
+            continue
+        dir_id_map[rel_dir] = make_id("dir", rel_dir.as_posix())
+
+    children_by_parent: dict[Path, list[Path]] = {}
+    for rel_dir in sorted_dirs:
+        if rel_dir == Path("."):
+            continue
+        parent = rel_dir.parent if rel_dir.parent != Path("") else Path(".")
+        children_by_parent.setdefault(parent, []).append(rel_dir)
+    for key in children_by_parent:
+        children_by_parent[key].sort(key=lambda p: p.name.lower())
+
+    files_by_dir: dict[Path, list[Path]] = {}
+    for path in files:
+        rel = path.relative_to(input_dir)
+        parent = rel.parent if rel.parent != Path("") else Path(".")
+        files_by_dir.setdefault(parent, []).append(path)
+    for key in files_by_dir:
+        files_by_dir[key].sort(key=lambda p: p.name.lower())
+
     lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
@@ -25,15 +59,35 @@ def generate_fragment(input_dir: Path, output_file: Path, component_group: str, 
     lines.append(f'    <DirectoryRef Id="{escape(directory_ref)}">')
 
     component_ids: list[str] = []
-    for path in files:
-        rel = path.relative_to(input_dir).as_posix()
-        comp_id = make_id("cmp", rel)
-        file_id = make_id("fil", rel)
-        source = escape(str(path.resolve()))
-        lines.append(f'      <Component Id="{comp_id}" Guid="*">')
-        lines.append(f'        <File Id="{file_id}" Source="{source}" KeyPath="yes" />')
-        lines.append("      </Component>")
-        component_ids.append(comp_id)
+
+    def emit_directory(rel_dir: Path, indent: int) -> None:
+        pad = " " * indent
+        if rel_dir != Path("."):
+            dir_id = dir_id_map[rel_dir]
+            lines.append(f'{pad}<Directory Id="{dir_id}" Name="{escape(rel_dir.name)}">')
+            inner_indent = indent + 2
+        else:
+            inner_indent = indent
+
+        for file_path in files_by_dir.get(rel_dir, []):
+            rel = file_path.relative_to(input_dir).as_posix()
+            comp_id = make_id("cmp", rel)
+            file_id = make_id("fil", rel)
+            source = escape(str(file_path.resolve()))
+            lines.append(f'{" " * inner_indent}<Component Id="{comp_id}" Guid="*">')
+            lines.append(
+                f'{" " * (inner_indent + 2)}<File Id="{file_id}" Name="{escape(file_path.name)}" Source="{source}" KeyPath="yes" />'
+            )
+            lines.append(f'{" " * inner_indent}</Component>')
+            component_ids.append(comp_id)
+
+        for child in children_by_parent.get(rel_dir, []):
+            emit_directory(child, inner_indent)
+
+        if rel_dir != Path("."):
+            lines.append(f"{pad}</Directory>")
+
+    emit_directory(Path("."), 6)
 
     lines.append("    </DirectoryRef>")
     lines.append("  </Fragment>")
