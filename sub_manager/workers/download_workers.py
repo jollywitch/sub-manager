@@ -184,6 +184,12 @@ class GlmOcrModelDownloadWorker(QObject):
             else:
                 env["PYTHONPATH"] = runtime_path
         env.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
+        # On Windows, Xet-backed paths can trigger WinError 448 in some
+        # environments. Prefer stable HTTP transfers by default.
+        if os.name == "nt":
+            env["HF_HUB_DISABLE_XET"] = "1"
+            env["HF_XET_HIGH_PERFORMANCE"] = "0"
+            return env, False
         xet_raw = str(env.get("HF_XET_HIGH_PERFORMANCE", "") or "").strip().lower()
         if xet_raw in {"0", "false", "no", "off"}:
             return env, False
