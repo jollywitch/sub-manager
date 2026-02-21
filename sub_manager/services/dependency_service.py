@@ -75,7 +75,23 @@ class DependencyService:
             return None
         if not snapshot_candidates:
             return None
-        return str(model_root)
+        required_markers = {
+            "config.json",
+            "preprocessor_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "model.safetensors",
+            "model.safetensors.index.json",
+            "pytorch_model.bin",
+        }
+        for snapshot in snapshot_candidates:
+            try:
+                file_names = {child.name for child in snapshot.iterdir() if child.is_file()}
+            except OSError:
+                continue
+            if file_names.intersection(required_markers):
+                return str(model_root)
+        return None
 
     def refresh_glm_ocr_model_status(self) -> tuple[str, str]:
         model_directory = self.find_local_glm_ocr_model_directory()
