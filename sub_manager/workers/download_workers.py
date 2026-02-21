@@ -197,8 +197,13 @@ class GlmOcrModelDownloadWorker(QObject):
             seen.add(key)
             commands.append(cmd)
 
-        if sys.executable:
-            add([sys.executable])
+        # In frozen builds, sys.executable points to the app .exe (not python),
+        # so using it with "-m pip" would recurse into the app and hang.
+        sys_exe = str(sys.executable or "").strip()
+        if sys_exe:
+            sys_exe_name = Path(sys_exe).name.lower()
+            if "python" in sys_exe_name:
+                add([sys_exe])
         if os.name == "nt":
             add(["py", "-3"])
         add(["python"])
@@ -247,8 +252,15 @@ class GlmOcrModelDownloadWorker(QObject):
                     capture_output=True,
                     text=True,
                     check=False,
+                    timeout=120,
                     **windows_hidden_subprocess_kwargs(),
                 )
+            except subprocess.TimeoutExpired:
+                self.diagnostic.emit(
+                    "Dependency install command timed out after 120s."
+                )
+                last_error = "Dependency install command timed out."
+                continue
             except Exception as exc:
                 last_error = str(exc)
                 self.diagnostic.emit(f"Dependency install command failed to start: {exc}")
