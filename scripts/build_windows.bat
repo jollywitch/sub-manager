@@ -39,7 +39,7 @@ for /f "usebackq delims=" %%v in (`python -c "import tomllib;print(tomllib.load(
 for /f "tokens=1-3 delims=.-" %%a in ("%RAW_VERSION%") do set "MSI_VERSION=%%a.%%b.%%c"
 if "%MSI_VERSION%"=="" set "MSI_VERSION=0.1.0"
 
-wix build installer/windows/sub-manager.wxs -arch x64 -dBuildOutputDir=dist/sub-manager -dProductVersion=%MSI_VERSION% -o dist/sub-manager.msi
+wix build installer/windows/sub-manager.wxs -arch x64 -d BuildOutputDir=dist/sub-manager -d ProductVersion=%MSI_VERSION% -o dist/sub-manager.msi
 
 if errorlevel 1 (
   echo Build failed.

@@ -29,8 +29,8 @@ else {
 
 wix build installer/windows/sub-manager.wxs `
     -arch x64 `
-    -dBuildOutputDir=dist/sub-manager `
-    -dProductVersion=$msiVersion `
+    -d BuildOutputDir=dist/sub-manager `
+    -d ProductVersion=$msiVersion `
     -o dist/sub-manager.msi
 
 Write-Host "Build finished. See dist/ directory."

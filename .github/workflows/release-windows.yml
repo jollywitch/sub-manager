@@ -62,8 +62,8 @@ jobs:
         run: |
           wix build installer/windows/sub-manager.wxs `
             -arch x64 `
-            -dBuildOutputDir=dist/sub-manager `
-            -dProductVersion=$env:MSI_VERSION `
+            -d BuildOutputDir=dist/sub-manager `
+            -d ProductVersion=$env:MSI_VERSION `
             -o dist/sub-manager.msi
 
       - name: Upload release asset (msi)
