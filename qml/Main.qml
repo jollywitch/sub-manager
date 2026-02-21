@@ -16,7 +16,7 @@ ApplicationWindow {
     property int subtitleColumnWidth: 250
     readonly property int tableContentWidth: selectColumnWidth + (separatorWidth * 3) + fileColumnWidth + audioColumnWidth + subtitleColumnWidth + 16
     visible: true
-    flags: baseWindowFlags | (backend.isSubWindowActive ? Qt.WindowDoesNotAcceptFocus : 0)
+    flags: baseWindowFlags
     title: "Sub Manager"
     x: backend.windowX
     y: backend.windowY
