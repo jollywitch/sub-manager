@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ctypes
 import importlib
 import logging
 import os
@@ -115,15 +116,24 @@ class GlmOcrModelDownloadWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, model_id: str, hf_token: str | None = None) -> None:
+    def __init__(self, model_id: str, hf_token: str | None = None, enable_xet: bool = False) -> None:
         super().__init__()
         self.model_id = model_id
         self.hf_token = (hf_token or "").strip() or None
+        self.enable_xet = bool(enable_xet)
         self._cancel_requested = False
         self._process: subprocess.Popen[str] | None = None
         self._runtime_site_packages = APP_DATA_DIR / "runtime-packages"
         self._runtime_python_dir = APP_DATA_DIR / "runtime-python"
         self._python_command: list[str] | None = None
+
+    def _is_windows_admin(self) -> bool:
+        if os.name != "nt":
+            return True
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
 
     @Slot()
     def cancel(self) -> None:
@@ -184,9 +194,11 @@ class GlmOcrModelDownloadWorker(QObject):
             else:
                 env["PYTHONPATH"] = runtime_path
         env.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
-        # On Windows, Xet-backed paths can trigger WinError 448 in some
-        # environments. Prefer stable HTTP transfers by default.
         if os.name == "nt":
+            if self.enable_xet and self._is_windows_admin():
+                env["HF_HUB_DISABLE_XET"] = "0"
+                env["HF_XET_HIGH_PERFORMANCE"] = "1"
+                return env, True
             env["HF_HUB_DISABLE_XET"] = "1"
             env["HF_XET_HIGH_PERFORMANCE"] = "0"
             return env, False
@@ -582,6 +594,11 @@ except Exception as exc:
             self._ensure_runtime_packages_available()
             self.progress.emit("Downloading or reusing GLM-OCR model files...")
             env, xet_enabled = self._build_download_env()
+            if os.name == "nt" and self.enable_xet and not xet_enabled:
+                self.diagnostic.emit(
+                    "Xet was requested but this session is not running as administrator. "
+                    "Falling back to standard transfer."
+                )
             self.diagnostic.emit(
                 f"transfer_mode=xet_high_performance:{'on' if xet_enabled else 'off'}"
             )

@@ -363,8 +363,13 @@ class AppBackend(QObject):
         self._glm_download_cancel_requested = False
         self._show_glm_download_progress("Preparing GLM-OCR download...")
         hf_token = self._current_hf_token()
+        enable_xet = bool(self.settings.value("glm/enable_xet", False, type=bool))
         self._glm_download_thread = QThread(self)
-        self._glm_download_worker = GlmOcrModelDownloadWorker(GLM_OCR_MODEL_ID, hf_token=hf_token)
+        self._glm_download_worker = GlmOcrModelDownloadWorker(
+            GLM_OCR_MODEL_ID,
+            hf_token=hf_token,
+            enable_xet=enable_xet,
+        )
         self._glm_download_worker.moveToThread(self._glm_download_thread)
         self._glm_download_thread.started.connect(self._glm_download_worker.run)
         self._glm_download_worker.progress.connect(self._on_glm_download_progress)
@@ -408,6 +413,7 @@ class AppBackend(QObject):
         window = GlmDownloadSetupWindow(
             on_download=self._on_glm_setup_download_clicked,
             on_cancel=self._on_glm_setup_cancelled,
+            enable_xet=bool(self.settings.value("glm/enable_xet", False, type=bool)),
         )
         existing_token = self._get_saved_hf_token()
         if existing_token:
@@ -421,9 +427,10 @@ class AppBackend(QObject):
         window.raise_()
         window.activateWindow()
 
-    def _on_glm_setup_download_clicked(self, token: str) -> None:
+    def _on_glm_setup_download_clicked(self, token: str, enable_xet: bool) -> None:
         if token:
             self.setHfToken(token)
+        self.settings.setValue("glm/enable_xet", bool(enable_xet))
         followup = self._glm_download_followup_action
         self._glm_download_followup_action = None
         # Always surface immediate feedback when user clicks Download Now.

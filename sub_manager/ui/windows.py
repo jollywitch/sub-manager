@@ -6,6 +6,7 @@ from typing import Callable
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -174,7 +175,10 @@ class SubtitleEditorWindow(QWidget):
 
 class GlmDownloadSetupWindow(QWidget):
     def __init__(
-        self, on_download: Callable[[str], None], on_cancel: Callable[[], None]
+        self,
+        on_download: Callable[[str, bool], None],
+        on_cancel: Callable[[], None],
+        enable_xet: bool = False,
     ) -> None:
         super().__init__(None, Qt.Window)
         self._on_download = on_download
@@ -204,6 +208,14 @@ class GlmDownloadSetupWindow(QWidget):
         self.token_edit.setEchoMode(QLineEdit.Password)
         root_layout.addWidget(self.token_edit)
 
+        self.xet_checkbox = QCheckBox("Enable Xet (requires administrator)")
+        self.xet_checkbox.setChecked(enable_xet)
+        root_layout.addWidget(self.xet_checkbox)
+
+        xet_hint = QLabel("If not elevated on Windows, download will automatically fall back to standard transfer.")
+        xet_hint.setWordWrap(True)
+        root_layout.addWidget(xet_hint)
+
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         self.cancel_button = QPushButton("Cancel")
@@ -221,8 +233,9 @@ class GlmDownloadSetupWindow(QWidget):
     @Slot()
     def _download(self) -> None:
         token = self.token_edit.text().strip()
+        enable_xet = self.xet_checkbox.isChecked()
         self._download_started = True
-        self._on_download(token)
+        self._on_download(token, enable_xet)
         self.close()
 
     def closeEvent(self, event: object) -> None:  # type: ignore[override]
