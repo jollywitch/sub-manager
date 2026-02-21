@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from types import ModuleType
 
+from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 from sub_manager.state_types import AudioStreamItem, SubtitleCodecStreamItem, SubtitleStreamItem
 
 
@@ -29,7 +30,13 @@ class SubtitleService:
             file_path,
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                **windows_hidden_subprocess_kwargs(),
+            )
             if result.returncode != 0:
                 return None
             payload = json.loads(result.stdout or "{}")
@@ -146,7 +153,13 @@ class SubtitleService:
             "-",
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=False, check=False)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=False,
+                check=False,
+                **windows_hidden_subprocess_kwargs(),
+            )
             if result.returncode != 0:
                 return None
             raw_text = result.stdout or b""
@@ -257,7 +270,13 @@ class SubtitleService:
             command.append(str(temp_output_path))
 
             try:
-                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    **windows_hidden_subprocess_kwargs(),
+                )
             except Exception as exc:
                 return (False, f"Could not run ffmpeg: {exc}")
             if result.returncode != 0:

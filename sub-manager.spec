@@ -50,6 +50,23 @@ UNUSED_QT_MODULE_EXCLUDES = [
     "PySide6.QtWebView",
 ]
 
+LIGHTWEIGHT_PYTHON_EXCLUDES = [
+    "PIL",
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "triton",
+    "sympy",
+    "networkx",
+    "transformers",
+    "tokenizers",
+    "safetensors",
+    "huggingface_hub",
+    "hf_xet",
+    "numpy",
+    "numpy.libs",
+]
+
 UNUSED_QT_ARTIFACT_PREFIXES = (
     "PySide6/Qt63D",
     "PySide6/Qt6Charts",
@@ -85,11 +102,45 @@ UNUSED_QT_ARTIFACT_PREFIXES = (
     "PySide6/plugins/qmltooling",
 )
 
+HEAVY_RUNTIME_ARTIFACT_PREFIXES = (
+    "PIL/",
+    "torch/",
+    "torchvision/",
+    "torchaudio/",
+    "triton/",
+    "sympy/",
+    "networkx/",
+    "transformers/",
+    "tokenizers/",
+    "safetensors/",
+    "huggingface_hub/",
+    "hf_xet/",
+    "numpy/",
+    "numpy.libs/",
+)
+
+HEAVY_RUNTIME_ARTIFACT_PATTERNS = (
+    "torch_cpu.dll",
+    "torch_python.dll",
+)
+
 def _filter_unused_qt_artifacts(toc):
     filtered = []
     for entry in toc:
         dest_name = (entry[0] if isinstance(entry, tuple) else str(entry)).replace("\\", "/")
         if any(dest_name.startswith(prefix) for prefix in UNUSED_QT_ARTIFACT_PREFIXES):
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _filter_heavy_runtime_artifacts(toc):
+    filtered = []
+    for entry in toc:
+        dest_name = (entry[0] if isinstance(entry, tuple) else str(entry)).replace("\\", "/")
+        if any(dest_name.startswith(prefix) for prefix in HEAVY_RUNTIME_ARTIFACT_PREFIXES):
+            continue
+        if any(pattern in dest_name for pattern in HEAVY_RUNTIME_ARTIFACT_PATTERNS):
             continue
         filtered.append(entry)
     return filtered
@@ -108,12 +159,14 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=UNUSED_QT_MODULE_EXCLUDES,
+    excludes=UNUSED_QT_MODULE_EXCLUDES + LIGHTWEIGHT_PYTHON_EXCLUDES,
     noarchive=False,
     optimize=0,
 )
 a.binaries = _filter_unused_qt_artifacts(a.binaries)
 a.datas = _filter_unused_qt_artifacts(a.datas)
+a.binaries = _filter_heavy_runtime_artifacts(a.binaries)
+a.datas = _filter_heavy_runtime_artifacts(a.datas)
 pyz = PYZ(a.pure)
 
 exe = EXE(

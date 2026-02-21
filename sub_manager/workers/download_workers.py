@@ -17,6 +17,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from sub_manager.process_utils import windows_hidden_subprocess_kwargs
+
 class FFmpegDownloadWorker(QObject):
     progress = Signal(str)
     finished = Signal(str)
@@ -244,6 +246,7 @@ except Exception as exc:
             text=True,
             bufsize=1,
             start_new_session=(os.name != "nt"),
+            **windows_hidden_subprocess_kwargs(),
         )
         event_queue: queue.Queue[dict[str, object]] = queue.Queue()
         stderr_queue: queue.Queue[str] = queue.Queue()

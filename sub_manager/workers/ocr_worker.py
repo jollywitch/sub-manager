@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from sub_manager.constants import GLM_OCR_MODEL_ID
 from sub_manager.models import PgsCompositionObject, PgsCue, PgsObjectData
+from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 
 class ImageSubtitleOcrWorker(QObject):
     progress = Signal(str)
@@ -252,7 +253,13 @@ class ImageSubtitleOcrWorker(QObject):
             str(sup_path),
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                **windows_hidden_subprocess_kwargs(),
+            )
         except Exception as exc:
             raise RuntimeError(f"Could not run ffmpeg for PGS extraction: {exc}") from exc
         if result.returncode != 0:

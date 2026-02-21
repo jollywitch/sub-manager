@@ -7,7 +7,7 @@ Build from a Windows shell (PowerShell) in the project root.
 uv sync
 ```
 
-2. Build folder-based app (recommended):
+2. Build MSI installer:
 ```powershell
 .\scripts\build_windows.ps1
 ```
@@ -17,17 +17,8 @@ Or without PowerShell execution policy changes:
 scripts\build_windows.bat
 ```
 
-3. Build single-file app (optional):
-```powershell
-.\scripts\build_windows.ps1 -OneFile
-```
-```bat
-scripts\build_windows.bat --onefile
-```
-
 Output:
-- Folder build: `dist\sub-manager\sub-manager.exe`
-- One-file build: `dist\sub-manager.exe`
+- MSI installer: `dist\sub-manager.msi`
 
 Notes:
 - QML assets are bundled into the executable build.
@@ -38,11 +29,10 @@ Notes:
 ## Automatic GitHub Release Builds
 
 If you push a git tag that starts with `v` (for example, `v0.1.0`), GitHub Actions will:
-- build Windows folder and one-file executables
+- build a Windows MSI installer
 - create/update a GitHub Release for that tag
 - attach assets:
-  - `sub-manager-windows-folder.zip`
-  - `sub-manager.exe`
+  - `sub-manager.msi`
 
 Example:
 ```bash
