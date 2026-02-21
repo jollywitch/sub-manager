@@ -34,12 +34,20 @@ if errorlevel 1 (
   )
   set "PATH=%PATH%;%USERPROFILE%\.dotnet\tools"
 )
+wix extension add WixToolset.Heat >nul 2>nul
 
 for /f "usebackq delims=" %%v in (`python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"`) do set "RAW_VERSION=%%v"
 for /f "tokens=1-3 delims=.-" %%a in ("%RAW_VERSION%") do set "MSI_VERSION=%%a.%%b.%%c"
 if "%MSI_VERSION%"=="" set "MSI_VERSION=0.1.0"
 
-wix build installer/windows/sub-manager.wxs -arch x64 -d BuildOutputDir=dist/sub-manager -d ProductVersion=%MSI_VERSION% -o dist/sub-manager.msi
+if not exist build\wix mkdir build\wix
+wix harvest directory dist/sub-manager -dr INSTALLFOLDER -cg AppFiles -o build/wix/sub-manager-files.wxs
+if errorlevel 1 (
+  echo Build failed.
+  exit /b 1
+)
+
+wix build installer/windows/sub-manager.wxs build/wix/sub-manager-files.wxs -arch x64 -d ProductVersion=%MSI_VERSION% -o dist/sub-manager.msi
 
 if errorlevel 1 (
   echo Build failed.

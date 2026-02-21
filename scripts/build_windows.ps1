@@ -18,6 +18,7 @@ if (-not $wixCommand) {
         $env:PATH = "$env:PATH;$toolPath"
     }
 }
+wix extension add WixToolset.Heat | Out-Null
 
 $rawVersion = (python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])").Trim()
 if ($rawVersion -match '^(\d+)\.(\d+)\.(\d+)') {
@@ -27,9 +28,18 @@ else {
     $msiVersion = "0.1.0"
 }
 
+$wixDir = "build/wix"
+if (-not (Test-Path $wixDir)) {
+    New-Item -ItemType Directory -Path $wixDir | Out-Null
+}
+wix harvest directory dist/sub-manager `
+    -dr INSTALLFOLDER `
+    -cg AppFiles `
+    -o build/wix/sub-manager-files.wxs
+
 wix build installer/windows/sub-manager.wxs `
+    build/wix/sub-manager-files.wxs `
     -arch x64 `
-    -d BuildOutputDir=dist/sub-manager `
     -d ProductVersion=$msiVersion `
     -o dist/sub-manager.msi
 

@@ -10,9 +10,11 @@
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="Sub Manager">
-        <Files Include="$(var.BuildOutputDir)\**" />
-      </Directory>
+      <Directory Id="INSTALLFOLDER" Name="Sub Manager" />
     </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Sub Manager" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
   </Package>
 </Wix>
