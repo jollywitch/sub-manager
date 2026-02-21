@@ -644,7 +644,7 @@ ApplicationWindow {
         visible: false
         modality: Qt.ApplicationModal
         transientParent: root
-        flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowSystemMenuHint
+        flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowSystemMenuHint
         title: "Subtitle Info"
         width: 430
         height: 230
@@ -683,7 +683,7 @@ ApplicationWindow {
         visible: false
         modality: Qt.ApplicationModal
         transientParent: root
-        flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowSystemMenuHint
+        flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowSystemMenuHint
         title: "Subtitle OCR"
         width: 440
         height: 170

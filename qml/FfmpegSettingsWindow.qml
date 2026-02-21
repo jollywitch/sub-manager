@@ -10,17 +10,14 @@ Window {
     readonly property color detailTextColor: "#777777"
     visible: false
     modality: Qt.ApplicationModal
-    transientParent: null
     width: dependenciesLayout.implicitWidth + 24
     height: dependenciesLayout.implicitHeight + 24
     minimumWidth: dependenciesLayout.implicitWidth + 24
     minimumHeight: dependenciesLayout.implicitHeight + 24
     title: "Dependencies"
-    flags: Qt.Window
+    flags: Qt.Dialog
         | Qt.WindowTitleHint
         | Qt.WindowSystemMenuHint
-        | Qt.WindowMinimizeButtonHint
-        | Qt.WindowMaximizeButtonHint
         | Qt.WindowCloseButtonHint
 
     onVisibleChanged: {
