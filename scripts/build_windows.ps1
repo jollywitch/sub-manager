@@ -10,37 +10,30 @@ if ($Clean) {
 
 uv run pyinstaller sub-manager.spec --noconfirm --clean
 
-$wixCommand = Get-Command wix -ErrorAction SilentlyContinue
-if (-not $wixCommand) {
-    dotnet tool install --global wix --version 4.*
-    $toolPath = Join-Path $env:USERPROFILE ".dotnet\tools"
-    if ($env:PATH -notlike "*$toolPath*") {
-        $env:PATH = "$env:PATH;$toolPath"
+$isccPath = Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\ISCC.exe"
+if (-not (Test-Path $isccPath)) {
+    $choco = Get-Command choco -ErrorAction SilentlyContinue
+    if ($null -eq $choco) {
+        throw "Inno Setup not found and Chocolatey is unavailable. Install Inno Setup 6 or Chocolatey first."
     }
+    choco install innosetup --no-progress -y
+}
+if (-not (Test-Path $isccPath)) {
+    throw "Inno Setup compiler not found at '$isccPath'."
 }
 
 $rawVersion = (python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])").Trim()
 if ($rawVersion -match '^(\d+)\.(\d+)\.(\d+)') {
-    $msiVersion = "$($matches[1]).$($matches[2]).$($matches[3])"
+    $installerVersion = "$($matches[1]).$($matches[2]).$($matches[3])"
 }
 else {
-    $msiVersion = "0.1.0"
+    $installerVersion = "0.1.0"
 }
 
-$wixDir = "build/wix"
-if (-not (Test-Path $wixDir)) {
-    New-Item -ItemType Directory -Path $wixDir | Out-Null
-}
-python scripts/generate_wix_fragment.py `
-    --input-dir dist/sub-manager `
-    --output-file build/wix/sub-manager-files.wxs `
-    --component-group AppFiles `
-    --directory-ref INSTALLFOLDER
-
-wix build installer/windows/sub-manager.wxs `
-    build/wix/sub-manager-files.wxs `
-    -arch x64 `
-    -d ProductVersion=$msiVersion `
-    -o dist/sub-manager.msi
+& $isccPath `
+    "/DAppVersion=$installerVersion" `
+    "/DBuildOutputDir=dist\\sub-manager" `
+    "/DOutputDir=dist" `
+    "installer\\windows\\sub-manager.iss"
 
 Write-Host "Build finished. See dist/ directory."

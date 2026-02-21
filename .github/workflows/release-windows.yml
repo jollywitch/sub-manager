@@ -1,4 +1,4 @@
-name: Release Windows MSI
+name: Release Windows Installer
 
 on:
   push:
@@ -41,40 +41,33 @@ jobs:
         shell: pwsh
         run: uv run pyinstaller sub-manager.spec --noconfirm --clean
 
-      - name: Install WiX
+      - name: Install Inno Setup
         shell: pwsh
         run: |
-          dotnet tool install --global wix --version 4.*
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          choco install innosetup --no-progress -y
 
-      - name: Resolve MSI version from tag
+      - name: Resolve installer version from tag
         shell: pwsh
         run: |
           $rawTag = "$env:RELEASE_TAG"
           $normalized = $rawTag.TrimStart('v')
           if ($normalized -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
-            throw "Release tag '$rawTag' is not a valid MSI version. Use tags like v1.2.3 or v1.2.3.4"
+            throw "Release tag '$rawTag' is not a valid version. Use tags like v1.2.3 or v1.2.3.4"
           }
-          "MSI_VERSION=$normalized" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "INSTALLER_VERSION=$normalized" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Build MSI
+      - name: Build installer
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force build/wix | Out-Null
-          python scripts/generate_wix_fragment.py `
-            --input-dir dist/sub-manager `
-            --output-file build/wix/sub-manager-files.wxs `
-            --component-group AppFiles `
-            --directory-ref INSTALLFOLDER
-          wix build installer/windows/sub-manager.wxs `
-            build/wix/sub-manager-files.wxs `
-            -arch x64 `
-            -d ProductVersion=$env:MSI_VERSION `
-            -o dist/sub-manager.msi
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DAppVersion=$env:INSTALLER_VERSION" `
+            "/DBuildOutputDir=dist\\sub-manager" `
+            "/DOutputDir=dist" `
+            "installer\\windows\\sub-manager.iss"
 
-      - name: Upload release asset (msi)
+      - name: Upload release asset (installer)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: dist/sub-manager.msi
+          files: dist/sub-manager-setup.exe
           generate_release_notes: true

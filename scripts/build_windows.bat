@@ -25,28 +25,32 @@ if errorlevel 1 (
   exit /b 1
 )
 
-where wix >nul 2>nul
+set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if exist "%ISCC%" goto iscc_ready
+
+where choco >nul 2>nul
 if errorlevel 1 (
-  dotnet tool install --global wix --version 4.*
-  if errorlevel 1 (
-    echo Failed to install WiX.
-    exit /b 1
-  )
-  set "PATH=%PATH%;%USERPROFILE%\.dotnet\tools"
+  echo Inno Setup not found and Chocolatey is unavailable.
+  echo Install Inno Setup 6 or Chocolatey first.
+  exit /b 1
 )
-
-for /f "usebackq delims=" %%v in (`python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"`) do set "RAW_VERSION=%%v"
-for /f "tokens=1-3 delims=.-" %%a in ("%RAW_VERSION%") do set "MSI_VERSION=%%a.%%b.%%c"
-if "%MSI_VERSION%"=="" set "MSI_VERSION=0.1.0"
-
-if not exist build\wix mkdir build\wix
-python scripts/generate_wix_fragment.py --input-dir dist/sub-manager --output-file build/wix/sub-manager-files.wxs --component-group AppFiles --directory-ref INSTALLFOLDER
+choco install innosetup --no-progress -y
 if errorlevel 1 (
-  echo Build failed.
+  echo Failed to install Inno Setup.
   exit /b 1
 )
 
-wix build installer/windows/sub-manager.wxs build/wix/sub-manager-files.wxs -arch x64 -d ProductVersion=%MSI_VERSION% -o dist/sub-manager.msi
+:iscc_ready
+if not exist "%ISCC%" (
+  echo Inno Setup compiler not found at "%ISCC%".
+  exit /b 1
+)
+
+for /f "usebackq delims=" %%v in (`python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"`) do set "RAW_VERSION=%%v"
+for /f "tokens=1-3 delims=.-" %%a in ("%RAW_VERSION%") do set "INSTALLER_VERSION=%%a.%%b.%%c"
+if "%INSTALLER_VERSION%"=="" set "INSTALLER_VERSION=0.1.0"
+
+"%ISCC%" /DAppVersion=%INSTALLER_VERSION% /DBuildOutputDir=dist\sub-manager /DOutputDir=dist installer\windows\sub-manager.iss
 
 if errorlevel 1 (
   echo Build failed.

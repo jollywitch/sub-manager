@@ -7,7 +7,7 @@ Build from a Windows shell (PowerShell) in the project root.
 uv sync
 ```
 
-2. Build MSI installer:
+2. Build Windows installer:
 ```powershell
 .\scripts\build_windows.ps1
 ```
@@ -18,7 +18,7 @@ scripts\build_windows.bat
 ```
 
 Output:
-- MSI installer: `dist\sub-manager.msi`
+- Installer: `dist\sub-manager-setup.exe`
 
 Notes:
 - QML assets are bundled into the executable build.
@@ -29,10 +29,10 @@ Notes:
 ## Automatic GitHub Release Builds
 
 If you push a git tag that starts with `v` (for example, `v0.1.0`), GitHub Actions will:
-- build a Windows MSI installer
+- build a Windows installer (`Inno Setup`)
 - create/update a GitHub Release for that tag
 - attach assets:
-  - `sub-manager.msi`
+  - `sub-manager-setup.exe`
 
 Example:
 ```bash
