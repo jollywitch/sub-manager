@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import importlib
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -12,7 +14,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from sub_manager.constants import GLM_OCR_MODEL_ID
+from sub_manager.constants import APP_DATA_DIR, GLM_OCR_MODEL_ID
 from sub_manager.models import PgsCompositionObject, PgsCue, PgsObjectData
 from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 
@@ -28,6 +30,7 @@ class ImageSubtitleOcrWorker(QObject):
     _model_cache_lock = threading.Lock()
     _cached_model_bundle: tuple[object, object, object] | None = None
     _cached_model_id: str | None = None
+    _runtime_install_lock = threading.Lock()
 
     def __init__(
         self,
@@ -156,6 +159,7 @@ class ImageSubtitleOcrWorker(QObject):
                 self.progress.emit("Reusing loaded GLM-OCR model...")
                 return self._cached_model_bundle
 
+        self._ensure_ocr_runtime_dependencies()
         try:
             import torch  # type: ignore
             from huggingface_hub import snapshot_download  # type: ignore
@@ -165,7 +169,8 @@ class ImageSubtitleOcrWorker(QObject):
             )
         except Exception as exc:
             raise RuntimeError(
-                "GLM-OCR dependencies are missing. Install: transformers, torch, pillow, huggingface_hub."
+                "GLM-OCR dependencies are missing after runtime setup. "
+                "Please retry from Dependencies > GLM-OCR download."
             ) from exc
 
         xet_raw = str(os.environ.get("HF_XET_HIGH_PERFORMANCE", "") or "").strip().lower()
@@ -220,6 +225,125 @@ class ImageSubtitleOcrWorker(QObject):
             self._cached_model_bundle = bundle
             self._cached_model_id = self.model_id
         return bundle
+
+    def _runtime_site_packages_dir(self) -> Path:
+        return APP_DATA_DIR / "runtime-packages"
+
+    def _runtime_python_exe(self) -> Path:
+        return APP_DATA_DIR / "runtime-python" / "python.exe"
+
+    def _prepare_runtime_import_paths(self) -> None:
+        runtime_dir = self._runtime_site_packages_dir()
+        runtime_str = str(runtime_dir)
+        if runtime_dir.exists() and runtime_str not in sys.path:
+            sys.path.insert(0, runtime_str)
+        torch_lib_dir = runtime_dir / "torch" / "lib"
+        if torch_lib_dir.exists():
+            existing_path = str(os.environ.get("PATH", "") or "")
+            torch_lib_str = str(torch_lib_dir)
+            if torch_lib_str and torch_lib_str not in existing_path.split(os.pathsep):
+                os.environ["PATH"] = f"{torch_lib_str}{os.pathsep}{existing_path}" if existing_path else torch_lib_str
+        importlib.invalidate_caches()
+
+    def _resolve_python_command_for_runtime_install(self) -> list[str] | None:
+        candidates: list[list[str]] = []
+        runtime_python = self._runtime_python_exe()
+        if runtime_python.exists():
+            candidates.append([str(runtime_python)])
+        if os.name == "nt":
+            candidates.append(["py", "-3"])
+        candidates.append(["python"])
+        for command in candidates:
+            try:
+                result = subprocess.run(
+                    command + ["-c", "import sys;print(sys.version)"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=15,
+                    **windows_hidden_subprocess_kwargs(),
+                )
+            except Exception:
+                continue
+            if result.returncode == 0:
+                return command
+        return None
+
+    def _can_import_ocr_modules(self) -> bool:
+        self._prepare_runtime_import_paths()
+        try:
+            import torch  # type: ignore
+            import transformers  # type: ignore
+            import PIL  # type: ignore
+            import huggingface_hub  # type: ignore
+            _ = (torch, transformers, PIL, huggingface_hub)
+            return True
+        except Exception:
+            return False
+
+    def _ensure_ocr_runtime_dependencies(self) -> None:
+        if self._can_import_ocr_modules():
+            return
+
+        with self._runtime_install_lock:
+            if self._can_import_ocr_modules():
+                return
+            python_command = self._resolve_python_command_for_runtime_install()
+            if python_command is None:
+                raise RuntimeError(
+                    "GLM-OCR runtime setup requires a Python runtime, but none was found. "
+                    "Use Dependencies > GLM-OCR download first to bootstrap runtime."
+                )
+
+            runtime_dir = self._runtime_site_packages_dir()
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            packages = [
+                "torch",
+                "transformers",
+                "Pillow",
+                "huggingface_hub>=0.28.0",
+                "hf_transfer>=0.1.9",
+                "numpy",
+                "tokenizers",
+                "safetensors",
+            ]
+            self.progress.emit("Preparing OCR runtime dependencies (one-time setup)...")
+            command = [
+                *python_command,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--target",
+                str(runtime_dir),
+                *packages,
+            ]
+            try:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=1800,
+                    **windows_hidden_subprocess_kwargs(),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("Timed out while installing OCR runtime dependencies.") from exc
+            except Exception as exc:
+                raise RuntimeError(f"Could not start OCR runtime dependency install: {exc}") from exc
+
+            if result.returncode != 0:
+                stderr_text = str(result.stderr or "").strip()
+                tail = "\n".join(stderr_text.splitlines()[-12:]) if stderr_text else "Unknown pip error"
+                raise RuntimeError(
+                    "Could not install OCR runtime dependencies automatically.\n"
+                    f"{tail}"
+                )
+
+            if not self._can_import_ocr_modules():
+                raise RuntimeError(
+                    "OCR runtime dependency install completed, but imports still failed."
+                )
 
     @classmethod
     def clear_model_cache(cls) -> None:
