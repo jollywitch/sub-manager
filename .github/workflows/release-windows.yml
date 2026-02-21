@@ -49,7 +49,7 @@ jobs:
       - name: Build (onefile)
         if: matrix.mode == 'onefile'
         shell: pwsh
-        run: uv run pyinstaller main.py --name sub-manager --onefile --windowed --noconfirm --clean --add-data "qml;qml"
+        run: uv run pyinstaller sub-manager-onefile.spec --noconfirm --clean
 
       - name: Archive folder build
         if: matrix.mode == 'folder'

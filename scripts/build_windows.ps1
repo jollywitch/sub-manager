@@ -10,7 +10,7 @@ if ($Clean) {
 }
 
 if ($OneFile) {
-    uv run pyinstaller main.py --name sub-manager --onefile --windowed --noconfirm --clean --add-data "qml;qml"
+    uv run pyinstaller sub-manager-onefile.spec --noconfirm --clean
 }
 else {
     uv run pyinstaller sub-manager.spec --noconfirm --clean
