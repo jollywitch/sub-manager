@@ -47,6 +47,7 @@ var
   RemoveAllData: Boolean;
   AppDataDir: string;
   GlmCacheDir: string;
+  UserProfileDir: string;
 begin
   if CurUninstallStep <> usUninstall then
     exit;
@@ -65,8 +66,9 @@ begin
   if not RemoveAllData then
     exit;
 
-  AppDataDir := ExpandConstant('{localappdata}\sub-manager');
-  GlmCacheDir := ExpandConstant('{userprofile}\.cache\huggingface\hub\models--zai-org--GLM-OCR');
+  AppDataDir := AddBackslash(GetEnv('LOCALAPPDATA')) + 'sub-manager';
+  UserProfileDir := GetEnv('USERPROFILE');
+  GlmCacheDir := AddBackslash(UserProfileDir) + '.cache\huggingface\hub\models--zai-org--GLM-OCR';
 
   if DirExists(AppDataDir) then
     DelTree(AppDataDir, True, True, True);
