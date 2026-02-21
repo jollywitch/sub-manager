@@ -122,6 +122,8 @@ class GlmOcrModelDownloadWorker(QObject):
         self._cancel_requested = False
         self._process: subprocess.Popen[str] | None = None
         self._runtime_site_packages = APP_DATA_DIR / "runtime-packages"
+        self._runtime_python_dir = APP_DATA_DIR / "runtime-python"
+        self._python_command: list[str] | None = None
 
     @Slot()
     def cancel(self) -> None:
@@ -209,6 +211,121 @@ class GlmOcrModelDownloadWorker(QObject):
         add(["python"])
         return commands
 
+    def _run_python_probe(self, command: list[str]) -> bool:
+        probe_cmd = command + ["-c", "import sys;print(sys.executable)"]
+        try:
+            result = subprocess.run(
+                probe_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+                **windows_hidden_subprocess_kwargs(),
+            )
+        except Exception:
+            return False
+        return result.returncode == 0
+
+    def _embedded_python_url_candidates(self) -> list[str]:
+        configured = str(os.environ.get("SUB_MANAGER_EMBEDDED_PYTHON_URL", "") or "").strip()
+        if configured:
+            return [configured]
+        # Try newest-to-oldest 3.13 patch versions to avoid hard failure when one URL changes.
+        versions = ["3.13.8", "3.13.7", "3.13.6", "3.13.5", "3.13.4", "3.13.3", "3.13.2", "3.13.1", "3.13.0"]
+        return [f"https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip" for v in versions]
+
+    def _ensure_embedded_python(self) -> list[str]:
+        python_exe = self._runtime_python_dir / "python.exe"
+        if python_exe.exists():
+            return [str(python_exe)]
+
+        self.progress.emit("Preparing embedded Python runtime...")
+        self.diagnostic.emit("No usable system Python runtime was found. Bootstrapping embedded Python.")
+        self._runtime_python_dir.mkdir(parents=True, exist_ok=True)
+
+        errors: list[str] = []
+        downloaded = False
+        for url in self._embedded_python_url_candidates():
+            if self._cancel_requested:
+                raise RuntimeError("GLM-OCR download cancelled.")
+            archive_path = self._runtime_python_dir / "python-embed.zip"
+            try:
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    archive_path.write_bytes(response.read())
+                with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                    zip_ref.extractall(self._runtime_python_dir)
+                archive_path.unlink(missing_ok=True)
+                downloaded = True
+                self.diagnostic.emit(f"Embedded Python downloaded from: {url}")
+                break
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+                try:
+                    archive_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        if not downloaded or not python_exe.exists():
+            raise RuntimeError(
+                "Could not bootstrap embedded Python runtime. "
+                f"Errors: {' | '.join(errors) if errors else 'unknown error'}"
+            )
+
+        pth_files = sorted(self._runtime_python_dir.glob("python*._pth"))
+        for pth_file in pth_files:
+            try:
+                lines = pth_file.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+            cleaned = [line for line in lines if line.strip() and not line.strip().startswith("#")]
+            if "Lib\\site-packages" not in cleaned:
+                cleaned.append("Lib\\site-packages")
+            if "import site" not in cleaned:
+                cleaned.append("import site")
+            pth_file.write_text("\n".join(cleaned) + "\n", encoding="utf-8")
+
+        # Install pip into embedded Python.
+        get_pip_path = self._runtime_python_dir / "get-pip.py"
+        try:
+            with urllib.request.urlopen("https://bootstrap.pypa.io/get-pip.py", timeout=30) as response:
+                get_pip_path.write_bytes(response.read())
+        except Exception as exc:
+            raise RuntimeError(f"Could not download get-pip.py for embedded Python: {exc}") from exc
+        try:
+            result = subprocess.run(
+                [str(python_exe), str(get_pip_path), "--disable-pip-version-check"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=180,
+                **windows_hidden_subprocess_kwargs(),
+            )
+        finally:
+            try:
+                get_pip_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if result.returncode != 0:
+            stderr_text = str(result.stderr or "").strip()
+            raise RuntimeError(
+                "Embedded Python bootstrap failed while installing pip. "
+                f"{stderr_text or 'Unknown pip error'}"
+            )
+        self.diagnostic.emit(f"Embedded Python runtime ready: {python_exe}")
+        return [str(python_exe)]
+
+    def _resolve_python_command(self) -> list[str]:
+        if self._python_command is not None:
+            return self._python_command
+        for command in self._candidate_python_commands():
+            if self._run_python_probe(command):
+                self._python_command = command
+                self.diagnostic.emit(f"Using Python runtime command: {' '.join(command)}")
+                return command
+        command = self._ensure_embedded_python()
+        self._python_command = command
+        return command
+
     def _ensure_runtime_packages_available(self) -> None:
         package_dir = self._runtime_site_packages
         package_dir.mkdir(parents=True, exist_ok=True)
@@ -233,7 +350,9 @@ class GlmOcrModelDownloadWorker(QObject):
         packages = ["huggingface_hub>=0.28.0", "hf_transfer>=0.1.9"]
         install_succeeded = False
         last_error = ""
-        for cmd in self._candidate_python_commands():
+        primary_command = self._resolve_python_command()
+        fallback_commands = [cmd for cmd in self._candidate_python_commands() if cmd != primary_command]
+        for cmd in [primary_command, *fallback_commands]:
             if self._cancel_requested:
                 raise RuntimeError("GLM-OCR download cancelled.")
             full_cmd = cmd + [
@@ -360,8 +479,9 @@ except Exception as exc:
     def _start_snapshot_subprocess(
         self, env: dict[str, str]
     ) -> tuple[queue.Queue[dict[str, object]], queue.Queue[str], threading.Thread, threading.Thread]:
+        python_command = self._resolve_python_command()
         self._process = subprocess.Popen(
-            [sys.executable, "-c", self._snapshot_download_script()],
+            [*python_command, "-c", self._snapshot_download_script()],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
