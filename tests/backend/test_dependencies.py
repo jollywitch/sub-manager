@@ -508,6 +508,26 @@ def test_image_ocr_setup_followup_starts_ocr_after_glm_download(
     assert events == ["ocr_started"]
 
 
+def test_on_ocr_failed_logs_root_cause_line(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_settings: FakeSettings,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    backend = _new_backend(monkeypatch, tmp_path)
+    monkeypatch.setattr(backend, "_close_ocr_progress_box", lambda: None)
+    monkeypatch.setattr(backend, "_refresh_glm_ocr_model_status", lambda: None)
+    shown: list[tuple[str, str]] = []
+    monkeypatch.setattr(backend, "_show_warning", lambda title, text: shown.append((title, text)))
+
+    with caplog.at_level("ERROR"):
+        backend._on_ocr_failed("outer error\ninner root cause")
+
+    assert "OCR failed. Root cause: inner root cause" in caplog.text
+    assert "OCR error payload:\nouter error\ninner root cause" in caplog.text
+    assert len(shown) == 1
+
+
 def test_glm_download_worker_uses_xet_high_performance_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

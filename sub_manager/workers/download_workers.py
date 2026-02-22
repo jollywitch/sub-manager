@@ -20,6 +20,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 
 from sub_manager.constants import APP_DATA_DIR
+from sub_manager.error_utils import format_exception_with_traceback
 from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 
 class FFmpegDownloadWorker(QObject):
@@ -49,6 +50,7 @@ class FFmpegDownloadWorker(QObject):
             self._install_binaries(install_bin_dir, ffmpeg_path, ffprobe_path)
             self.finished.emit(str(install_bin_dir))
         except Exception as exc:
+            logging.error("FFmpeg download worker failed.\n%s", format_exception_with_traceback(exc))
             self.failed.emit(str(exc))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -961,6 +963,7 @@ except Exception as exc:
             self.diagnostic.emit(
                 f"snapshot_download failed after {elapsed_s:.1f}s: {type(exc).__name__}: {exc}"
             )
+            logging.error("GLM-OCR download worker failed.\n%s", format_exception_with_traceback(exc))
             self.failed.emit(str(exc))
         finally:
             self._terminate_process()

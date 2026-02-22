@@ -558,7 +558,7 @@ class AppBackend(QObject):
     def _on_glm_download_failed(self, error_message: str) -> None:
         if self._glm_download_cancel_requested or error_message.strip() == "GLM-OCR download cancelled.":
             return
-        logging.error("GLM download failed: %s", error_message)
+        self._log_error_message_details("GLM download", error_message)
         self._append_glm_download_diagnostic(f"Failure: {error_message}")
         self._glm_download_followup_action = None
         self._close_glm_download_progress_box()
@@ -947,7 +947,7 @@ class AppBackend(QObject):
 
     @Slot(str)
     def _on_ocr_failed(self, error_message: str) -> None:
-        logging.error("OCR failed: %s", error_message)
+        self._log_error_message_details("OCR", error_message)
         self._close_ocr_progress_box()
         self._refresh_glm_ocr_model_status()
         if error_message.strip() == "OCR cancelled.":
@@ -1301,12 +1301,22 @@ class AppBackend(QObject):
 
     @Slot(str)
     def _on_download_failed(self, error_message: str) -> None:
-        logging.error("FFmpeg download failed: %s", error_message)
+        self._log_error_message_details("FFmpeg download", error_message)
         self._set_ffmpeg_status("error", "FFmpeg download failed.")
         self._show_critical(
             "Download Failed",
             f"Could not download/install FFmpeg.\n\n{error_message}",
         )
+
+    def _log_error_message_details(self, operation: str, error_message: str) -> None:
+        clean = str(error_message or "").strip()
+        if not clean:
+            logging.error("%s failed with an empty error message.", operation)
+            return
+        lines = [line.strip() for line in clean.splitlines() if line.strip()]
+        root_line = lines[-1] if lines else clean
+        logging.error("%s failed. Root cause: %s", operation, root_line)
+        logging.error("%s error payload:\n%s", operation, clean)
 
     def _on_download_thread_finished(self) -> None:
         logging.info("FFmpeg download thread finished.")

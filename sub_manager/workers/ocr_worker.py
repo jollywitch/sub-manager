@@ -15,6 +15,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, Signal, Slot
 
 from sub_manager.constants import APP_DATA_DIR, GLM_OCR_MODEL_ID
+from sub_manager.error_utils import format_exception_with_traceback, root_cause_summary
 from sub_manager.models import PgsCompositionObject, PgsCue, PgsObjectData
 from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 
@@ -87,7 +88,7 @@ class ImageSubtitleOcrWorker(QObject):
                     raise RuntimeError("OCR completed but no subtitle text was recognized.")
                 self.finished.emit(srt_text)
         except Exception as exc:
-            logging.error("Image subtitle OCR worker failed", exc_info=True)
+            logging.error("Image subtitle OCR worker failed.\n%s", format_exception_with_traceback(exc))
             self.failed.emit(str(exc))
 
     def _validate_runtime_dependencies(self) -> None:
@@ -269,7 +270,7 @@ class ImageSubtitleOcrWorker(QObject):
                 return command
         return None
 
-    def _can_import_ocr_modules(self) -> bool:
+    def _can_import_ocr_modules(self) -> tuple[bool, Exception | None]:
         self._prepare_runtime_import_paths()
         try:
             import torch  # type: ignore
@@ -277,16 +278,18 @@ class ImageSubtitleOcrWorker(QObject):
             import PIL  # type: ignore
             import huggingface_hub  # type: ignore
             _ = (torch, transformers, PIL, huggingface_hub)
-            return True
-        except Exception:
-            return False
+            return (True, None)
+        except Exception as exc:
+            return (False, exc)
 
     def _ensure_ocr_runtime_dependencies(self) -> None:
-        if self._can_import_ocr_modules():
+        import_ok, import_exc = self._can_import_ocr_modules()
+        if import_ok:
             return
 
         with self._runtime_install_lock:
-            if self._can_import_ocr_modules():
+            import_ok, import_exc = self._can_import_ocr_modules()
+            if import_ok:
                 return
             python_command = self._resolve_python_command_for_runtime_install()
             if python_command is None:
@@ -340,10 +343,17 @@ class ImageSubtitleOcrWorker(QObject):
                     f"{tail}"
                 )
 
-            if not self._can_import_ocr_modules():
-                raise RuntimeError(
-                    "OCR runtime dependency install completed, but imports still failed."
+            import_ok, import_exc = self._can_import_ocr_modules()
+            if not import_ok:
+                root_cause = (
+                    root_cause_summary(import_exc)
+                    if import_exc is not None
+                    else "UnknownError: import probe did not provide an exception."
                 )
+                raise RuntimeError(
+                    "OCR runtime dependency install completed, but imports still failed.\n"
+                    f"Root cause: {root_cause}"
+                ) from import_exc
 
     @classmethod
     def clear_model_cache(cls) -> None:

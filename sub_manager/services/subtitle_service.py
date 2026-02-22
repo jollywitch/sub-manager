@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
 from types import ModuleType
 
+from sub_manager.error_utils import format_exception_with_traceback
 from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 from sub_manager.state_types import AudioStreamItem, SubtitleCodecStreamItem, SubtitleStreamItem
 
@@ -43,7 +45,12 @@ class SubtitleService:
             if not isinstance(payload, dict):
                 return None
             return payload
-        except Exception:
+        except Exception as exc:
+            logging.error(
+                "ffprobe JSON inspection failed for file=%s.\n%s",
+                file_path,
+                format_exception_with_traceback(exc),
+            )
             return None
 
     def inspect_stream_languages(
@@ -169,7 +176,13 @@ class SubtitleService:
                 except UnicodeDecodeError:
                     continue
             return raw_text.decode("utf-8", errors="replace")
-        except Exception:
+        except Exception as exc:
+            logging.error(
+                "Subtitle text extraction failed for file=%s stream_index=%s.\n%s",
+                file_path,
+                stream_index,
+                format_exception_with_traceback(exc),
+            )
             return None
 
     def output_subtitle_codec_for_container(self, file_path: str) -> str | None:
