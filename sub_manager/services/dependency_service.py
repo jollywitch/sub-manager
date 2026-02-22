@@ -61,8 +61,32 @@ class DependencyService:
         model_root = self._glm_model_root()
         snapshot = self._find_completed_glm_snapshot(model_root)
         if snapshot is None:
-            return None
+            saved_snapshot = self._saved_glm_snapshot_path()
+            if saved_snapshot is None:
+                return None
+            resolved_root = self._model_root_for_snapshot(saved_snapshot) or model_root
+            return str(resolved_root)
         return str(model_root)
+
+    def save_last_glm_snapshot_path(self, snapshot_path: str) -> None:
+        clean = str(snapshot_path or "").strip()
+        if clean:
+            self.settings.setValue("glm/last_snapshot_path", clean)
+
+    def _saved_glm_snapshot_path(self) -> Path | None:
+        saved = str(self.settings.value("glm/last_snapshot_path", "") or "").strip()
+        if not saved:
+            return None
+        snapshot = Path(saved)
+        if not snapshot.is_dir():
+            return None
+        return snapshot
+
+    def _model_root_for_snapshot(self, snapshot_path: Path) -> Path | None:
+        snapshots_dir = snapshot_path.parent
+        if snapshots_dir.name != "snapshots":
+            return None
+        return snapshots_dir.parent
 
     def _glm_model_root(self) -> Path:
         hub_cache_env = str(self._os.environ.get("HUGGINGFACE_HUB_CACHE", "") or "").strip()

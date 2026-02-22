@@ -32,6 +32,7 @@ class ImageSubtitleOcrWorker(QObject):
     _cached_model_bundle: tuple[object, object, object] | None = None
     _cached_model_id: str | None = None
     _runtime_install_lock = threading.Lock()
+    _runtime_path_diagnostics_logged = False
 
     def __init__(
         self,
@@ -240,15 +241,29 @@ class ImageSubtitleOcrWorker(QObject):
         runtime_paths: list[Path] = []
         runtime_dir = self._runtime_site_packages_dir()
         runtime_python_root = self._runtime_python_root()
+        runtime_stdlib_dir = runtime_python_root / "Lib"
         runtime_paths.append(runtime_dir)
         runtime_paths.append(runtime_python_root / "python313.zip")
-        runtime_paths.append(runtime_python_root / "Lib")
+        runtime_paths.append(runtime_stdlib_dir)
         existing_sys_path = set(sys.path)
         for path in runtime_paths:
             path_str = str(path)
             if path.exists() and path_str not in existing_sys_path:
                 sys.path.insert(0, path_str)
                 existing_sys_path.add(path_str)
+        # In frozen builds, ctypes may already be imported from a trimmed runtime.
+        # Extend ctypes package lookup to embedded stdlib so ctypes.wintypes resolves.
+        embedded_ctypes_dir = runtime_stdlib_dir / "ctypes"
+        if embedded_ctypes_dir.is_dir():
+            try:
+                import ctypes  # type: ignore
+
+                ctypes_path = getattr(ctypes, "__path__", None)
+                embedded_ctypes_str = str(embedded_ctypes_dir)
+                if ctypes_path is not None and embedded_ctypes_str not in ctypes_path:
+                    ctypes_path.append(embedded_ctypes_str)
+            except Exception:
+                pass
         torch_lib_dir = runtime_dir / "torch" / "lib"
         if torch_lib_dir.exists():
             existing_path = str(os.environ.get("PATH", "") or "")
@@ -256,6 +271,23 @@ class ImageSubtitleOcrWorker(QObject):
             if torch_lib_str and torch_lib_str not in existing_path.split(os.pathsep):
                 os.environ["PATH"] = f"{torch_lib_str}{os.pathsep}{existing_path}" if existing_path else torch_lib_str
         importlib.invalidate_caches()
+        if not self.__class__._runtime_path_diagnostics_logged:
+            self.__class__._runtime_path_diagnostics_logged = True
+            try:
+                import ctypes  # type: ignore
+                import importlib.util
+
+                ctypes_file = str(getattr(ctypes, "__file__", "<unknown>"))
+                wintypes_spec = importlib.util.find_spec("ctypes.wintypes")
+                logging.info(
+                    "OCR runtime path diagnostics: python313.zip_exists=%s lib_exists=%s ctypes_source=%s ctypes_wintypes_found=%s",
+                    (runtime_python_root / "python313.zip").exists(),
+                    runtime_stdlib_dir.exists(),
+                    ctypes_file,
+                    bool(wintypes_spec),
+                )
+            except Exception:
+                pass
 
     def _resolve_python_command_for_runtime_install(self) -> list[str] | None:
         candidates: list[list[str]] = []

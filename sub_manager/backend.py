@@ -540,6 +540,7 @@ class AppBackend(QObject):
             return
         logging.info("GLM download finished successfully: %s", local_model_path)
         self._append_glm_download_diagnostic(f"Download finished. Local path: {local_model_path}")
+        self._save_last_glm_snapshot_path(local_model_path)
         followup_action = self._glm_download_followup_action
         self._glm_download_followup_action = None
         self._close_glm_download_progress_box()
@@ -1529,6 +1530,9 @@ class AppBackend(QObject):
 
     def _find_local_glm_ocr_model_directory(self) -> str | None:
         return self._dependency_service.find_local_glm_ocr_model_directory()
+
+    def _save_last_glm_snapshot_path(self, snapshot_path: str) -> None:
+        self._dependency_service.save_last_glm_snapshot_path(snapshot_path)
 
     def _refresh_ffmpeg_status(self) -> None:
         # Preserve active FFmpeg download status text; do not overwrite it with

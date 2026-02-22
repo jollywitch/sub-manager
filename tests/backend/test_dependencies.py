@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import main
+import sub_manager.services.dependency_service as dependency_service
 
 
 class FakeSettings:
@@ -98,12 +99,31 @@ def test_glm_model_status_ok_when_snapshot_exists(
 ) -> None:
     snapshots = tmp_path / "hub" / "models--zai-org--GLM-OCR" / "snapshots" / "abc123"
     snapshots.mkdir(parents=True)
+    monkeypatch.setattr(dependency_service, "MIN_GLM_WEIGHT_FILE_BYTES", 1)
+    monkeypatch.setattr(dependency_service, "MIN_GLM_SNAPSHOT_BYTES", 1)
+    (snapshots / "weights.safetensors").write_bytes(b"x")
     backend = _new_backend(monkeypatch, tmp_path)
 
     backend.refreshDependencyStatuses()
 
     assert backend.glmOcrModelStatusLevel == "ok"
     assert backend.glmOcrModelStatus == f"Installed: {snapshots.parent.parent}"
+
+
+def test_glm_model_status_ok_when_saved_snapshot_path_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_settings: FakeSettings,
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "hub" / "models--zai-org--GLM-OCR" / "snapshots" / "saved123"
+    snapshot.mkdir(parents=True)
+    fake_settings.setValue("glm/last_snapshot_path", str(snapshot))
+    backend = _new_backend(monkeypatch, tmp_path)
+
+    backend.refreshDependencyStatuses()
+
+    assert backend.glmOcrModelStatusLevel == "ok"
+    assert backend.glmOcrModelStatus == f"Installed: {snapshot.parent.parent}"
 
 
 def test_glm_model_status_warn_when_snapshot_missing(
