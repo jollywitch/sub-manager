@@ -260,8 +260,21 @@ class ImageSubtitleOcrWorker(QObject):
 
                 ctypes_path = getattr(ctypes, "__path__", None)
                 embedded_ctypes_str = str(embedded_ctypes_dir)
-                if ctypes_path is not None and embedded_ctypes_str not in ctypes_path:
-                    ctypes_path.append(embedded_ctypes_str)
+                if ctypes_path is not None:
+                    try:
+                        ctypes_path_list = list(ctypes_path)
+                    except Exception:
+                        ctypes_path_list = []
+                    if embedded_ctypes_str in ctypes_path_list:
+                        try:
+                            ctypes_path.remove(embedded_ctypes_str)
+                        except Exception:
+                            pass
+                    try:
+                        ctypes_path.insert(0, embedded_ctypes_str)
+                    except Exception:
+                        ctypes_path.append(embedded_ctypes_str)
+                sys.modules.pop("ctypes.wintypes", None)
             except Exception:
                 pass
         torch_lib_dir = runtime_dir / "torch" / "lib"

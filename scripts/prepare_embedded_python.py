@@ -34,6 +34,22 @@ def _download_file(url: str, destination: Path) -> None:
         destination.write_bytes(response.read())
 
 
+def _extract_ctypes_from_stdlib_zip(runtime_dir: Path) -> None:
+    stdlib_zip = runtime_dir / "python313.zip"
+    if not stdlib_zip.exists():
+        return
+    target_lib = runtime_dir / "Lib"
+    target_lib.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(stdlib_zip, "r") as zip_ref:
+        members = [
+            member
+            for member in zip_ref.namelist()
+            if member.startswith("ctypes/") and member.endswith(".py")
+        ]
+        for member in members:
+            zip_ref.extract(member, path=target_lib)
+
+
 def main() -> int:
     project_root = _project_root()
     output_dir = project_root / "build" / "runtime-python"
@@ -54,6 +70,7 @@ def main() -> int:
     if not python_exe.exists():
         raise RuntimeError(f"Embedded Python executable not found after extraction: {python_exe}")
 
+    _extract_ctypes_from_stdlib_zip(output_dir)
     _ensure_pth_configuration(output_dir)
 
     print(f"Downloading get-pip from {GET_PIP_URL}")
