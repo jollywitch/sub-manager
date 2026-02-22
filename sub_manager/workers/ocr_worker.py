@@ -275,7 +275,6 @@ class ImageSubtitleOcrWorker(QObject):
             self.__class__._runtime_path_diagnostics_logged = True
             try:
                 import ctypes  # type: ignore
-                import importlib.util
 
                 ctypes_file = str(getattr(ctypes, "__file__", "<unknown>"))
                 wintypes_spec = importlib.util.find_spec("ctypes.wintypes")
