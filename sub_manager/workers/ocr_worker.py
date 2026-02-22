@@ -233,11 +233,22 @@ class ImageSubtitleOcrWorker(QObject):
     def _runtime_python_exe(self) -> Path:
         return APP_DATA_DIR / "runtime-python" / "python.exe"
 
+    def _runtime_python_root(self) -> Path:
+        return APP_DATA_DIR / "runtime-python"
+
     def _prepare_runtime_import_paths(self) -> None:
+        runtime_paths: list[Path] = []
         runtime_dir = self._runtime_site_packages_dir()
-        runtime_str = str(runtime_dir)
-        if runtime_dir.exists() and runtime_str not in sys.path:
-            sys.path.insert(0, runtime_str)
+        runtime_python_root = self._runtime_python_root()
+        runtime_paths.append(runtime_dir)
+        runtime_paths.append(runtime_python_root / "python313.zip")
+        runtime_paths.append(runtime_python_root / "Lib")
+        existing_sys_path = set(sys.path)
+        for path in runtime_paths:
+            path_str = str(path)
+            if path.exists() and path_str not in existing_sys_path:
+                sys.path.insert(0, path_str)
+                existing_sys_path.add(path_str)
         torch_lib_dir = runtime_dir / "torch" / "lib"
         if torch_lib_dir.exists():
             existing_path = str(os.environ.get("PATH", "") or "")

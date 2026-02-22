@@ -1315,6 +1315,8 @@ class AppBackend(QObject):
             return
         lines = [line.strip() for line in clean.splitlines() if line.strip()]
         root_line = lines[-1] if lines else clean
+        if root_line.lower().startswith("root cause:"):
+            root_line = root_line.split(":", 1)[1].strip() or root_line
         logging.error("%s failed. Root cause: %s", operation, root_line)
         logging.error("%s error payload:\n%s", operation, clean)
 
