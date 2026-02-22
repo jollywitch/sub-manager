@@ -8,6 +8,7 @@ if ($Clean) {
     if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
 }
 
+uv run python scripts/prepare_embedded_python.py
 uv run pyinstaller sub-manager.spec --noconfirm --clean
 
 $isccPath = Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\ISCC.exe"

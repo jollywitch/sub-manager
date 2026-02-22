@@ -21,6 +21,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from sub_manager.constants import APP_DATA_DIR
 from sub_manager.error_utils import format_exception_with_traceback
+from sub_manager.paths import resource_root
 from sub_manager.process_utils import windows_hidden_subprocess_kwargs
 
 class FFmpegDownloadWorker(QObject):
@@ -259,9 +260,38 @@ class GlmOcrModelDownloadWorker(QObject):
         versions = ["3.13.8", "3.13.7", "3.13.6", "3.13.5", "3.13.4", "3.13.3", "3.13.2", "3.13.1", "3.13.0"]
         return [f"https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip" for v in versions]
 
+    def _seed_embedded_python_from_bundle(self) -> bool:
+        bundled_runtime = resource_root() / "runtime-python"
+        bundled_python = bundled_runtime / "python.exe"
+        target_python = self._runtime_python_dir / "python.exe"
+        if not bundled_python.exists():
+            return False
+        if target_python.exists():
+            return True
+        try:
+            if self._runtime_python_dir.exists():
+                shutil.rmtree(self._runtime_python_dir)
+            self._runtime_python_dir.mkdir(parents=True, exist_ok=True)
+            for item in bundled_runtime.iterdir():
+                destination = self._runtime_python_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, destination)
+                else:
+                    shutil.copy2(item, destination)
+        except Exception as exc:
+            self.diagnostic.emit(f"Bundled embedded Python copy failed: {type(exc).__name__}: {exc}")
+            return False
+        if target_python.exists():
+            self.diagnostic.emit(f"Using bundled embedded Python runtime from: {bundled_runtime}")
+            return True
+        return False
+
     def _ensure_embedded_python(self) -> list[str]:
         python_exe = self._runtime_python_dir / "python.exe"
         if python_exe.exists():
+            return [str(python_exe)]
+
+        if self._seed_embedded_python_from_bundle() and python_exe.exists():
             return [str(python_exe)]
 
         self.progress.emit("Preparing embedded Python runtime...")

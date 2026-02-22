@@ -7,6 +7,7 @@ from pathlib import Path
 _spec_file = globals().get("__file__")
 project_root = Path(_spec_file).resolve().parent if _spec_file else Path.cwd().resolve()
 qml_dir = project_root / "qml"
+runtime_python_bundle_dir = project_root / "build" / "runtime-python"
 
 UNUSED_QT_MODULE_EXCLUDES = [
     "PySide6.Qt3DAnimation",
@@ -149,6 +150,8 @@ def _filter_heavy_runtime_artifacts(toc):
 datas = []
 if qml_dir.exists():
     datas.append((str(qml_dir), "qml"))
+if runtime_python_bundle_dir.exists():
+    datas.append((str(runtime_python_bundle_dir), "runtime-python"))
 
 a = Analysis(
     ["main.py"],

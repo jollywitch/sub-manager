@@ -19,6 +19,12 @@ if "%CLEAN%"=="1" (
   if exist build rmdir /s /q build
 )
 
+uv run python scripts\prepare_embedded_python.py
+if errorlevel 1 (
+  echo Failed to prepare embedded Python runtime.
+  exit /b 1
+)
+
 uv run pyinstaller sub-manager.spec --noconfirm --clean
 if errorlevel 1 (
   echo Build failed.

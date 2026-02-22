@@ -37,6 +37,10 @@ jobs:
         shell: pwsh
         run: uv sync --group dev
 
+      - name: Prepare embedded Python runtime bundle
+        shell: pwsh
+        run: uv run python scripts/prepare_embedded_python.py
+
       - name: Build app payload
         shell: pwsh
         run: uv run pyinstaller sub-manager.spec --noconfirm --clean
